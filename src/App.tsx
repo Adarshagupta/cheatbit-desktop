@@ -32,6 +32,7 @@ import {
 } from "../shared/aiConfig"
 import type { ComputerUseState, LiveInterviewState } from "../shared/followUpChat"
 import { updateWindowToElement } from "./utils/contentSize"
+import { setVoiceModeEnabled } from "./lib/voiceMode"
 
 interface PhoneFileNotice {
   id: string
@@ -92,6 +93,9 @@ function buildPhoneFileNotice(
   }
 }
 
+// The dock no longer collapses into the idle island after inactivity.
+// Set to true to restore the auto-collapse after IDLE_ISLAND_DELAY_MS.
+const IDLE_ISLAND_ENABLED = false
 const IDLE_ISLAND_DELAY_MS = 60_000
 
 function applyWindowOpacityTier(opacity: number) {
@@ -182,6 +186,7 @@ function App() {
   const hasActiveForegroundSession =
     isRealtimeVoiceActive || isLiveSessionActive || isComputerUseActive
   const canUseIdleIsland =
+    IDLE_ISLAND_ENABLED &&
     isInitialized &&
     authState.authenticated &&
     !hasAuxOpen &&
@@ -743,6 +748,7 @@ function App() {
         } else {
           updateLanguage("python")
         }
+        setVoiceModeEnabled(config?.voiceModeEnabled !== false)
         setWidgetScale(normalizeWidgetScale(config?.widgetScale))
         applyWindowOpacityTier(
           typeof config?.opacity === "number" ? config.opacity : 1

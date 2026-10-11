@@ -979,7 +979,8 @@ function setWindowDimensions(width: number, height: number): void {
 
 // Environment setup
 function loadEnvVariables() {
-  if (isDev) {
+  // Unpackaged production runs (npm run run-prod) use the project .env too.
+  if (isDev || !app.isPackaged) {
     console.log("Loading env variables from:", path.join(process.cwd(), ".env"))
     dotenv.config({ path: path.join(process.cwd(), ".env") })
   } else {

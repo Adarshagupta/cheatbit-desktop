@@ -80,6 +80,8 @@ const electronAPI = {
     ipcRenderer.invoke("auth:register", payload) as Promise<AuthState>,
   login: (payload: { email: string; password: string }) =>
     ipcRenderer.invoke("auth:login", payload) as Promise<AuthState>,
+  loginAsGuest: () =>
+    ipcRenderer.invoke("auth:guest-login") as Promise<AuthState>,
   startWebLogin: () =>
     ipcRenderer.invoke("auth:start-web-login") as Promise<
       { success: true } | { success: false; error: string }

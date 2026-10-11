@@ -19,6 +19,7 @@ export interface AppConfig {
   debuggingModel: string;
   language: string;
   opacity: number;
+  voiceModeEnabled?: boolean;
 }
 
 export const DEFAULT_PROVIDER: ApiProvider = "together";
@@ -348,4 +349,17 @@ export function sanitizeModelSelection(
   }
 
   return model;
+}
+
+// LOCAL PLACEHOLDER: App.tsx imports these, but they were never committed.
+export const DEFAULT_WIDGET_SCALE = 1;
+const MIN_WIDGET_SCALE = 0.5;
+const MAX_WIDGET_SCALE = 2;
+
+export function normalizeWidgetScale(value: unknown): number {
+  const scale = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return DEFAULT_WIDGET_SCALE;
+  }
+  return Math.min(MAX_WIDGET_SCALE, Math.max(MIN_WIDGET_SCALE, scale));
 }

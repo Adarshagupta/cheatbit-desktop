@@ -3,9 +3,20 @@ import path from "node:path"
 import { app } from "electron"
 import Store from "electron-store"
 import type { AuthSession } from "../shared/backendAuth"
+import type {
+  ChatThreadSummary,
+  PersistedChatMessage,
+} from "../shared/followUpChat"
+
+// Guest sessions have no backend account, so their chat history lives here.
+export interface GuestChatStore {
+  threads: ChatThreadSummary[]
+  messages: PersistedChatMessage[]
+}
 
 interface StoreSchema {
   authSession: AuthSession | null
+  guestChat: GuestChatStore
 }
 
 const STORE_ENCRYPTION_KEY = "your-encryption-key"
@@ -48,6 +59,7 @@ ensureDirectoryExists(storeDirectory)
 const baseStore = new Store<StoreSchema>({
   defaults: {
     authSession: null,
+    guestChat: { threads: [], messages: [] },
   },
   encryptionKey: STORE_ENCRYPTION_KEY,
   cwd: storeDirectory,
@@ -73,6 +85,7 @@ function migrateLegacySession(): void {
     const legacyStore = new Store<StoreSchema>({
       defaults: {
         authSession: null,
+        guestChat: { threads: [], messages: [] },
       },
       encryptionKey: STORE_ENCRYPTION_KEY,
       cwd: legacyDirectory,

@@ -18,6 +18,7 @@ import {
 } from "../../shared/followUpChat"
 import type { DesktopUpdateState } from "../../shared/desktopUpdates"
 import { EMPTY_AGENT_STATE, type AgentState } from "../../shared/agent"
+import { isVoiceModeEnabled } from "../lib/voiceMode"
 
 const WAKE_WORD_SAMPLE_RATE = 24000
 const WAKE_WORD_SILENCE_THRESHOLD = 0.016
@@ -342,7 +343,13 @@ const Queue: React.FC<QueueProps> = ({
     setTooltipHeight(height)
   }
 
+  const voiceModeEnabled = isVoiceModeEnabled()
+
   const handleStartVoiceMode = () => {
+    if (!voiceModeEnabled) {
+      return
+    }
+
     if (liveInterviewState.status !== "idle") {
       showToast(
         "Voice",
@@ -362,7 +369,7 @@ const Queue: React.FC<QueueProps> = ({
   // re-trigger voice or steal focus from whatever the user is doing.
   const hasAutoStartedVoiceRef = useRef(false)
   useEffect(() => {
-    if (hasAutoStartedVoiceRef.current) {
+    if (hasAutoStartedVoiceRef.current || !voiceModeEnabled) {
       return
     }
     if (liveInterviewState.status !== "idle") {
@@ -402,6 +409,7 @@ const Queue: React.FC<QueueProps> = ({
     // wake word stayed disabled forever after the user stopped voice without
     // closing the panel.
     if (
+      !voiceModeEnabled ||
       isVoiceSessionLive ||
       activeMode === "live" ||
       liveInterviewState.status !== "idle"
@@ -601,7 +609,7 @@ const Queue: React.FC<QueueProps> = ({
         // Ignore audio context close races.
       })
     }
-  }, [activeMode, isVoiceSessionLive, liveInterviewState.status])
+  }, [activeMode, isVoiceSessionLive, liveInterviewState.status, voiceModeEnabled])
 
   const handleOpenLiveMode = () => {
     setActiveMode("live")
@@ -622,6 +630,10 @@ const Queue: React.FC<QueueProps> = ({
   }
 
   const handleOpenVoiceMode = () => {
+    if (!voiceModeEnabled) {
+      return
+    }
+
     if (isMinimized) {
       setIsMinimized(false)
     }

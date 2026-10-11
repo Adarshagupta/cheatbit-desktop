@@ -606,6 +606,13 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     }
   })
 
+  ipcMain.handle("auth:guest-login", () => {
+    return {
+      authenticated: true,
+      session: backendClient.loginAsGuest(),
+    }
+  })
+
   ipcMain.handle("auth:start-web-login", async () => {
     try {
       await shell.openExternal(backendClient.getWebLoginUrl())
@@ -1073,6 +1080,13 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   })
 
   ipcMain.handle("voice-realtime:start", async (_event, payload) => {
+    if (configHelper.loadConfig().voiceModeEnabled === false) {
+      return {
+        success: false as const,
+        error: "Voice mode is turned off in Settings.",
+      }
+    }
+
     const apiKey = configHelper.getConfiguredApiKey("openai")
     if (!apiKey) {
       return {
@@ -1806,6 +1820,11 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       } catch (error) {
         console.warn("Failed to apply screen recording visibility:", error);
       }
+    }
+
+    // Turning voice mode off ends any realtime session that is still open.
+    if (previous.voiceModeEnabled !== false && next.voiceModeEnabled === false) {
+      closeVoiceRealtimeSession();
     }
 
     return next;

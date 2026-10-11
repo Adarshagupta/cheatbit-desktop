@@ -67,6 +67,7 @@ export function SettingsDialog({
     DEFAULT_MODELS[DEFAULT_PROVIDER].debuggingModel
   )
   const [language, setLanguage] = useState("python")
+  const [voiceModeEnabled, setVoiceModeEnabled] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const { showToast } = useToast()
 
@@ -89,6 +90,7 @@ export function SettingsDialog({
           config.debuggingModel || DEFAULT_MODELS[provider].debuggingModel
         )
         setLanguage(config.language || "python")
+        setVoiceModeEnabled(config.voiceModeEnabled !== false)
       })
       .catch((error: unknown) => {
         console.error("Failed to load config:", error)
@@ -167,6 +169,7 @@ export function SettingsDialog({
         solutionModel,
         debuggingModel,
         language,
+        voiceModeEnabled,
       })
 
       if (result) {
@@ -260,7 +263,7 @@ export function SettingsDialog({
                   Workspace
                 </h3>
                 <p className="text-[11px] leading-5 text-white/55">
-                  Language and account controls.
+                  Language, voice, and account controls.
                 </p>
               </div>
 
@@ -279,6 +282,36 @@ export function SettingsDialog({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <label
+                    htmlFor="voice-mode-toggle"
+                    className="block text-[12px] font-medium text-white"
+                  >
+                    Voice mode
+                  </label>
+                  <p className="text-[11px] text-white/45">
+                    Realtime voice and "Hey Sylica"
+                  </p>
+                </div>
+                <button
+                  id="voice-mode-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked={voiceModeEnabled}
+                  onClick={() => setVoiceModeEnabled((enabled) => !enabled)}
+                  className={`relative h-5 w-9 shrink-0 rounded-full border border-white/10 transition-colors ${
+                    voiceModeEnabled ? "bg-[#a8d8c4]" : "bg-white/10"
+                  }`}
+                >
+                  <span
+                    className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                      voiceModeEnabled ? "translate-x-4" : ""
+                    }`}
+                  />
+                </button>
               </div>
 
               <Button

@@ -20,6 +20,7 @@ import type {
 import { EMPTY_AGENT_STATE, type AgentState } from "../../../shared/agent"
 import { useToast } from "../../contexts/toast"
 import { Button } from "../ui/button"
+import { isVoiceModeEnabled } from "../../lib/voiceMode"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
@@ -849,7 +850,7 @@ export function AssistantChat({
   mode,
   currentContext = "",
   computerTaskRequest = null,
-  panelMode = "voice",
+  panelMode: requestedPanelMode = "voice",
   voiceFocused = false,
   voiceAutoStartSignal = null,
   onComputerTaskRequestConsumed,
@@ -860,6 +861,9 @@ export function AssistantChat({
 }: AssistantChatProps) {
   const queryClient = useQueryClient()
   const { showToast } = useToast()
+  const voiceModeEnabled = isVoiceModeEnabled()
+  // With voice mode off, the voice panel falls back to the Live Interview layout.
+  const panelMode = voiceModeEnabled ? requestedPanelMode : "live"
   const isPersistedMode = mode === "general"
   const [messages, setMessages] = useState<FollowUpChatMessage[]>(() =>
     mode === "general" && globalVoiceSessionActive
@@ -2978,6 +2982,7 @@ export function AssistantChat({
 
   const startVoiceCompanion = async () => {
     if (
+      !voiceModeEnabled ||
       !isPersistedMode ||
       isLiveSessionActive ||
       isVoiceCompanionActive

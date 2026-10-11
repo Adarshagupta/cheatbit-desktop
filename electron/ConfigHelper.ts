@@ -27,7 +27,8 @@ export class ConfigHelper extends EventEmitter {
     solutionModel: DEFAULT_MODELS[DEFAULT_PROVIDER].solutionModel,
     debuggingModel: DEFAULT_MODELS[DEFAULT_PROVIDER].debuggingModel,
     language: "python",
-    opacity: 1.0
+    opacity: 1.0,
+    voiceModeEnabled: true
   };
 
   constructor() {

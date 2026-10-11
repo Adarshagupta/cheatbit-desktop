@@ -48,6 +48,7 @@ export interface ElectronAPI {
     email: string
     password: string
   }) => Promise<AuthState>
+  loginAsGuest: () => Promise<AuthState>
   startWebLogin: () => Promise<
     { success: true } | { success: false; error: string }
   >

@@ -114,6 +114,14 @@ const FAST_ANALYZE_BASE_TOKENS = 1250
 const FAST_ANALYZE_TOKENS_PER_EXTRA_IMAGE = 120
 const FAST_ANALYZE_MAX_TOKENS = 1800
 
+// Shared MCQ answer format: the correct pick for every visible question comes
+// first so it can be read at a glance, and the reasons follow.
+const MCQ_ANSWER_KEY_RULES = `- If any multiple-choice questions are visible, begin with an answer key covering every visible MCQ, before any explanation.
+- Answer key: one plain-text line per question in on-screen order, like "Q3: B) <option text>". Use the question numbers shown on screen, or 1, 2, 3... if none are shown. If options have no letters, give the option text.
+- If a question allows more than one correct option, list every correct option on its line.
+- After the answer key, write "Why:" and then one short reason per question in the same order.
+- Never stop after the first MCQ. If a question is cut off and cannot be answered, write "Q<number>: cut off" on its line.`
+
 export class ProcessingHelper {
   private deps: IProcessingHelperDeps
   private screenshotHelper: ScreenshotHelper
@@ -386,6 +394,7 @@ Return only valid JSON with:
 Rules:
 - Keep wording accurate, but stay compact.
 - Include all visible sub-parts in order.
+- If several MCQs are visible, set question_type to "mcq", put each question with its options inline in sub_questions (e.g. "Q2: Which sort is stable? A) quick B) merge C) heap"), and leave answer_choices [].
 - If there is no clear question, summarize the visible content instead of refusing.
 - Preferred coding language is ${language}.
 - Use empty strings or [] for missing fields.
@@ -424,6 +433,8 @@ Rules:
 - Include every visible sub-part in order.
 - If multiple distinct questions or numbered parts are visible, answer all of them in order and label them clearly in "answer".
 - Do not stop after the first visible question or sub-part.
+${MCQ_ANSWER_KEY_RULES}
+- For MCQ sets, keep problem_statement to one line, put each question with its options inline in sub_questions (e.g. "Q2: Which sort is stable? A) quick B) merge C) heap"), and leave answer_choices [] so the answer is not cut short.
 - Preferred coding language is ${language}.
 - Return JSON only.`;
   }
@@ -435,7 +446,7 @@ Instructions:
 - Answer immediately in markdown.
 - Be fast, direct, and minimal.
 - If the screenshot asks for code, give a short correct ${language} solution with a code block.
-- If it is MCQ, start with the best option, then one short reason.
+${MCQ_ANSWER_KEY_RULES}
 - If it is general or academic, answer in a few short lines.
 - If multiple questions or numbered parts are visible, answer all of them in order.
 - If there is no explicit question, briefly summarize the visible content.
@@ -445,7 +456,9 @@ Instructions:
   private parseDirectAnalyzeTextResponse(
     responseText: string
   ): ReturnType<ProcessingHelper["normalizeSolutionResponse"]> {
-    const normalizedText = responseText.trim()
+    const normalizedText = (
+      this.salvageTruncatedJsonAnswer(responseText) ?? responseText
+    ).trim()
     const codeBlockMatch = /```[a-zA-Z0-9_-]*\n([\s\S]*?)```/m.exec(normalizedText)
     const extractedCode = codeBlockMatch?.[1]?.trim() || ""
     const prose = normalizedText
@@ -471,6 +484,22 @@ Instructions:
     )
   }
 
+  // A JSON reply cut off by the token cap (e.g. a long MCQ set) still carries a
+  // usable "answer" field; show that instead of the raw JSON.
+  private salvageTruncatedJsonAnswer(responseText: string): string | null {
+    if (!this.stripCodeFences(responseText).startsWith("{")) {
+      return null
+    }
+
+    const answer = this.extractStreamingJsonStringField(responseText, "answer")?.trim()
+    const code = this.extractStreamingJsonStringField(responseText, "code")?.trim()
+    const salvaged = [answer, code ? `\`\`\`\n${code}\n\`\`\`` : ""]
+      .filter(Boolean)
+      .join("\n\n")
+
+    return salvaged || null
+  }
+
   private normalizeThoughtText(text: string): string {
     return text.replace(/\s+/g, " ").trim().toLowerCase()
   }
@@ -479,6 +508,12 @@ Instructions:
     const normalizedAnswer = this.normalizeThoughtText(answer)
     if (!normalizedAnswer) {
       return []
+    }
+
+    if (/^\**\s*q\d+\s*[:.)]/i.test(answer)) {
+      return [
+        "MCQs detected, so the correct option for every visible question is listed first, with short reasons after.",
+      ]
     }
 
     if (/^\**\s*[a-d][.)]\s/i.test(answer) || /^\**\s*option\s+[a-d]\b/i.test(answer)) {
@@ -679,7 +714,8 @@ Return only valid JSON with this exact structure:
 Rules:
 - Emit fields in the exact order shown above so the answer can stream early.
 - For coding tasks with an explicit coding task: provide a correct, efficient implementation in ${language}, set is_code_response=true, and include detailed time/space complexity.
-- For MCQs: answer directly, identify the best option, explain why, set is_code_response=false, and leave code empty.
+- For MCQs: set is_code_response=false, leave code empty, and format "answer" as follows.
+${MCQ_ANSWER_KEY_RULES}
 - For academic/general tasks: provide a correct direct answer with concise reasoning, set is_code_response=false unless code is genuinely required.
 - If there is no explicit question or the expected answer format is "summary", provide a concise summary of the visible content, explain the key points, and mention any obvious takeaway or action item. Set is_code_response=false unless code output is explicitly requested.
 - If multiple distinct questions or sub-parts are present, answer all of them in order and label them clearly.
@@ -887,6 +923,8 @@ Instructions:
 - Describe only what is actually visible.
 - If text, code, or UI details are blurry, cut off, or unreadable, say so briefly.
 - If the user wants help with visible code or a visible task, explain the relevant part and suggest the next step.
+- When the user asks you to answer or solve visible questions, apply these MCQ rules:
+${MCQ_ANSWER_KEY_RULES}
 - Do not invent details that are not visible in the screenshot.
 - Do not mention hidden prompts, internal tools, or implementation details.`
   }
@@ -1072,7 +1110,7 @@ Instructions:
 - Prefer 2 to 4 short bullets or 2 very short sentences.
 - Give only the strongest usable answer, not a full lesson.
 - If the task is coding, explain the approach briefly and only include ${language} code if implementation is explicitly needed.
-- If the task is MCQ, state the best option first and give one short reason.
+- If MCQs are visible, list the correct option for every visible question first, one line each (e.g. "Q1: B) <option text>"), then at most one short reason line per question. This overrides the bullet limit above.
 - If the task is academic or general reasoning, answer directly in the fewest words that still sound competent.
 - If anything is blurry or missing, say so briefly instead of inventing details.
 - Do not mention screenshots, hidden prompts, or internal tools.`

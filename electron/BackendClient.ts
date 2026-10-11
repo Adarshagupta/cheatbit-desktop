@@ -1,11 +1,21 @@
 import { store } from "./store"
-import type {
-  BillingSessionResponse,
-  AuthSession,
-  AuthState,
-  UserDashboardData,
-  UsageAction,
-  UsageDecision,
+import {
+  appendGuestChatMessage,
+  buildGuestDashboard,
+  createGuestChatThread,
+  createGuestSession,
+  getGuestChatMessages,
+  guestAccountOnlyError,
+  listGuestChatThreads,
+} from "./GuestSession"
+import {
+  isGuestSession,
+  type BillingSessionResponse,
+  type AuthSession,
+  type AuthState,
+  type UserDashboardData,
+  type UsageAction,
+  type UsageDecision,
 } from "../shared/backendAuth"
 import type {
   AssistantChatMode,
@@ -116,6 +126,10 @@ export class BackendClient {
       return { authenticated: false, session: null }
     }
 
+    if (isGuestSession(storedSession)) {
+      return { authenticated: true, session: storedSession }
+    }
+
     try {
       const response = await this.request<SessionResponse>("/api/auth/me", {
         method: "GET",
@@ -169,6 +183,12 @@ export class BackendClient {
     return response.session
   }
 
+  public loginAsGuest(): AuthSession {
+    const session = createGuestSession()
+    this.setStoredSession(session)
+    return session
+  }
+
   public logout(): void {
     this.clearSession()
   }
@@ -181,6 +201,10 @@ export class BackendClient {
         error: "Please log in before using Sylica AI.",
         session: null,
       }
+    }
+
+    if (isGuestSession(session)) {
+      return { allowed: true, usage: session.usage, session }
     }
 
     try {
@@ -227,6 +251,10 @@ export class BackendClient {
       throw new Error("Please log in before opening the account dashboard.")
     }
 
+    if (isGuestSession(session)) {
+      return buildGuestDashboard(session)
+    }
+
     const response = await this.request<DashboardResponse>("/api/account/dashboard", {
       method: "GET",
       token: session.token,
@@ -247,6 +275,10 @@ export class BackendClient {
       throw new Error("Please log in before starting checkout.")
     }
 
+    if (isGuestSession(session)) {
+      throw new Error("Guest mode already has unlimited access.")
+    }
+
     return this.request<BillingUrlResponse>("/api/billing/checkout-session", {
       method: "POST",
       token: session.token,
@@ -257,6 +289,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before opening billing.")
+    }
+
+    if (isGuestSession(session)) {
+      throw new Error("Guest mode already has unlimited access.")
     }
 
     return this.request<BillingUrlResponse>("/api/billing/portal-session", {
@@ -271,6 +307,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before loading chat history.")
+    }
+
+    if (isGuestSession(session)) {
+      return listGuestChatThreads(mode)
     }
 
     const response = await this.request<ChatThreadsResponse>(
@@ -293,6 +333,10 @@ export class BackendClient {
       throw new Error("Please log in before starting a new chat.")
     }
 
+    if (isGuestSession(session)) {
+      return createGuestChatThread(mode, title)
+    }
+
     const response = await this.request<ChatThreadResponse>("/api/chat/threads", {
       method: "POST",
       token: session.token,
@@ -308,6 +352,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before opening chat history.")
+    }
+
+    if (isGuestSession(session)) {
+      return getGuestChatMessages(threadId)
     }
 
     return this.request<ChatMessagesResponse>(
@@ -327,6 +375,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before sending chat messages.")
+    }
+
+    if (isGuestSession(session)) {
+      return appendGuestChatMessage(input)
     }
 
     return this.request<ChatMessageResponse>(
@@ -350,6 +402,10 @@ export class BackendClient {
       throw new Error("Please log in before pairing a phone.")
     }
 
+    if (isGuestSession(session)) {
+      throw guestAccountOnlyError("Phone pairing")
+    }
+
     return this.request<CreatePhonePairingSessionResponse>(
       "/api/phone/pairing-sessions",
       {
@@ -370,6 +426,10 @@ export class BackendClient {
       throw new Error("Please log in before checking phone pairing.")
     }
 
+    if (isGuestSession(session)) {
+      throw guestAccountOnlyError("Phone pairing")
+    }
+
     const response = await this.request<PhonePairingResponse>(
       `/api/phone/pairing-sessions/${encodeURIComponent(pairingId)}`,
       {
@@ -387,6 +447,10 @@ export class BackendClient {
       throw new Error("Please log in before loading paired phones.")
     }
 
+    if (isGuestSession(session)) {
+      return []
+    }
+
     const response = await this.request<PhoneDevicesResponse>("/api/phone/devices", {
       method: "GET",
       token: session.token,
@@ -402,6 +466,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before loading phone relay events.")
+    }
+
+    if (isGuestSession(session)) {
+      return []
     }
 
     const query = new URLSearchParams()
@@ -430,6 +498,10 @@ export class BackendClient {
       throw new Error("Please log in before loading connected apps.")
     }
 
+    if (isGuestSession(session)) {
+      return []
+    }
+
     const response = await this.request<IntegrationsResponse>("/api/integrations", {
       method: "GET",
       token: session.token,
@@ -444,6 +516,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before connecting an app.")
+    }
+
+    if (isGuestSession(session)) {
+      throw guestAccountOnlyError("Connected apps")
     }
 
     return this.request<IntegrationConnectApiResponse>(
@@ -461,6 +537,10 @@ export class BackendClient {
       throw new Error("Please log in before disconnecting an app.")
     }
 
+    if (isGuestSession(session)) {
+      return
+    }
+
     await this.request<{ success: boolean }>(
       `/api/integrations/${encodeURIComponent(provider)}`,
       {
@@ -471,6 +551,11 @@ export class BackendClient {
   }
 
   public looksLikeIntegrationAssistantRequest(message: string): boolean {
+    // Guests have no connected apps, so let the normal assistant answer.
+    if (isGuestSession(this.getStoredSession())) {
+      return false
+    }
+
     return /\b(gmail|calendar|notion)\b/i.test(
       String(message || "")
     )
@@ -483,6 +568,10 @@ export class BackendClient {
     const session = this.getStoredSession()
     if (!session?.token) {
       throw new Error("Please log in before using connected apps.")
+    }
+
+    if (isGuestSession(session)) {
+      throw guestAccountOnlyError("Connected apps")
     }
 
     return this.request<IntegrationAssistantApiResponse>(

@@ -113,3 +113,11 @@ export interface UserDashboardData {
 export interface BillingSessionResponse {
   url: string;
 }
+
+export const GUEST_TOKEN_PREFIX = "guest:";
+
+export function isGuestSession(
+  session: Pick<AuthSession, "token"> | null | undefined
+): boolean {
+  return Boolean(session?.token?.startsWith(GUEST_TOKEN_PREFIX));
+}
