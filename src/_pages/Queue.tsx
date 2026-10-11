@@ -6,7 +6,6 @@ import QueueCommands from "../components/Queue/QueueCommands"
 import { useToast } from "../contexts/toast"
 import { GeneralChatPanel } from "../components/Chat/GeneralChatPanel"
 import { VoiceAssistantPanel } from "../components/Chat/VoiceAssistantPanel"
-import AgentPanel from "../components/Agent/AgentPanel"
 import { Screenshot } from "../types/screenshots"
 import { updateWindowToElement } from "../utils/contentSize"
 import { getProcessingToastCopy } from "../utils/processingErrors"
@@ -17,7 +16,6 @@ import {
   EMPTY_LIVE_INTERVIEW_STATE,
 } from "../../shared/followUpChat"
 import type { DesktopUpdateState } from "../../shared/desktopUpdates"
-import { EMPTY_AGENT_STATE, type AgentState } from "../../shared/agent"
 import { isVoiceModeEnabled } from "../lib/voiceMode"
 
 const WAKE_WORD_SAMPLE_RATE = 24000
@@ -25,6 +23,7 @@ const WAKE_WORD_SILENCE_THRESHOLD = 0.016
 const WAKE_WORD_MIN_SPEECH_MS = 260
 const WAKE_WORD_END_SILENCE_MS = 650
 const WAKE_WORD_MAX_SEGMENT_MS = 4200
+let hasAutoStartedVoiceThisLoad = false
 
 function hasSylicaWakeWord(transcript: string): boolean {
   return /\b(hey|hi|okay|ok)[\s,.-]*(sylica|silica|celica|sylika)\b/i.test(transcript)
@@ -126,7 +125,7 @@ const Queue: React.FC<QueueProps> = ({
 
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const [tooltipHeight, setTooltipHeight] = useState(0)
-  const [activeMode, setActiveMode] = useState<"analyze" | "voice" | "live" | "agent">("analyze")
+  const [activeMode, setActiveMode] = useState<"analyze" | "voice" | "live">("analyze")
   const [isMinimized, setIsMinimized] = useState(false)
   const [computerUseState, setComputerUseState] = useState<ComputerUseState>(
     EMPTY_COMPUTER_USE_STATE
@@ -144,7 +143,6 @@ const Queue: React.FC<QueueProps> = ({
   const [liveInterviewState, setLiveInterviewState] = useState<LiveInterviewState>(
     EMPTY_LIVE_INTERVIEW_STATE
   )
-  const [agentState, setAgentState] = useState<AgentState>(EMPTY_AGENT_STATE)
   const contentRef = useRef<HTMLDivElement>(null)
   const wakeWordCooldownRef = useRef(0)
 
@@ -201,16 +199,8 @@ const Queue: React.FC<QueueProps> = ({
       }
     }
 
-    const loadAgentState = async () => {
-      const response = await window.electronAPI.getAgentState()
-      if (!cancelled && response.success) {
-        setAgentState(response.data.state)
-      }
-    }
-
     void loadLiveInterviewState()
     void loadComputerUseState()
-    void loadAgentState()
 
     const unsubscribe = window.electronAPI.onLiveInterviewState((state: LiveInterviewState) => {
       setLiveInterviewState(state)
@@ -218,15 +208,11 @@ const Queue: React.FC<QueueProps> = ({
     const unsubscribeComputerUse = window.electronAPI.onComputerUseState((state: ComputerUseState) => {
       setComputerUseState(state)
     })
-    const unsubscribeAgent = window.electronAPI.onAgentState((state: AgentState) => {
-      setAgentState(state)
-    })
 
     return () => {
       cancelled = true
       unsubscribe()
       unsubscribeComputerUse()
-      unsubscribeAgent()
     }
   }, [])
 
@@ -235,22 +221,6 @@ const Queue: React.FC<QueueProps> = ({
       setActiveMode("live")
     }
   }, [activeMode, liveInterviewState.status])
-
-  useEffect(() => {
-    const isAgentActive =
-      agentState.status === "planning" ||
-      agentState.status === "awaiting_workspace" ||
-      agentState.status === "awaiting_approval" ||
-      agentState.status === "running"
-
-    if (
-      isAgentActive &&
-      activeMode !== "agent" &&
-      liveInterviewState.status === "idle"
-    ) {
-      setActiveMode("agent")
-    }
-  }, [activeMode, agentState.status, liveInterviewState.status])
 
   useEffect(() => {
     // Height update logic
@@ -333,9 +303,6 @@ const Queue: React.FC<QueueProps> = ({
     isTooltipVisible,
     tooltipHeight,
     liveInterviewState.status,
-    agentState.status,
-    agentState.events.length,
-    agentState.artifacts.length,
   ])
 
   const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
@@ -364,12 +331,11 @@ const Queue: React.FC<QueueProps> = ({
   }
 
   // Auto-start voice once on initial app launch so Sylica is ready to talk
-  // without the user needing to click anything. Guarded by a ref so it only
-  // fires once per page load — re-entering this page (HMR, Strict Mode) won't
-  // re-trigger voice or steal focus from whatever the user is doing.
-  const hasAutoStartedVoiceRef = useRef(false)
+  // without the user needing to click anything. The guard is module-level so
+  // it fires once per page load — Queue remounts on Start Over and after
+  // errors, and must not re-trigger voice or steal focus each time.
   useEffect(() => {
-    if (hasAutoStartedVoiceRef.current || !voiceModeEnabled) {
+    if (hasAutoStartedVoiceThisLoad || !voiceModeEnabled) {
       return
     }
     if (liveInterviewState.status !== "idle") {
@@ -378,7 +344,7 @@ const Queue: React.FC<QueueProps> = ({
     if (isComputerTaskActive) {
       return
     }
-    hasAutoStartedVoiceRef.current = true
+    hasAutoStartedVoiceThisLoad = true
     // Slight delay lets the dock + panels finish their entrance animation
     // before the mic lights up, so it doesn't feel jarring.
     const handle = window.setTimeout(() => {
@@ -619,14 +585,13 @@ const Queue: React.FC<QueueProps> = ({
     setActiveMode("analyze")
   }
 
-  const handleOpenAgentMode = () => {
-    // Make sure the widget is expanded so the agent panel below the dock is
-    // actually visible — otherwise clicking the agent indicator from a
-    // minimized widget appears to do nothing.
+  // Computer Use status and controls live in the chat panel. Expand the
+  // widget first so clicking the dock pill from a minimized widget works.
+  const handleOpenComputerUse = () => {
     if (isMinimized) {
       setIsMinimized(false)
     }
-    setActiveMode("agent")
+    handleOpenLiveMode()
   }
 
   const handleOpenVoiceMode = () => {
@@ -689,9 +654,15 @@ const Queue: React.FC<QueueProps> = ({
   }
 
   const hasExpandedPanel =
-    !isMinimized && (activeMode === "voice" || activeMode === "live" || activeMode === "agent" || screenshots.length > 0)
-  const shouldOpenPanelBelow = activeMode === "voice" || activeMode === "live" || activeMode === "agent"
+    !isMinimized && (activeMode === "voice" || activeMode === "live" || screenshots.length > 0)
   const shouldUseCompactDockLayout = !isMinimized && !hasExpandedPanel
+
+  // While the panel collapses, keep rendering the mode that was open so the
+  // content doesn't swap to an empty view mid-animation.
+  const [panelContentMode, setPanelContentMode] = useState(activeMode)
+  if (hasExpandedPanel && panelContentMode !== activeMode) {
+    setPanelContentMode(activeMode)
+  }
   const [shouldRenderExpandedPanel, setShouldRenderExpandedPanel] =
     useState(hasExpandedPanel)
 
@@ -714,7 +685,7 @@ const Queue: React.FC<QueueProps> = ({
   useEffect(() => {
     const handleClosePanel = () => {
       // Reset to analyze mode to close expanded panels
-      if (activeMode === "voice" || activeMode === "live" || activeMode === "agent") {
+      if (activeMode === "voice" || activeMode === "live") {
         setActiveMode("analyze")
       }
     }
@@ -726,7 +697,7 @@ const Queue: React.FC<QueueProps> = ({
   }, [activeMode])
 
   const handleClosePanel = () => {
-    if (activeMode === "voice" || activeMode === "live" || activeMode === "agent") {
+    if (activeMode === "voice" || activeMode === "live") {
       setActiveMode("analyze")
     }
   }
@@ -754,19 +725,10 @@ const Queue: React.FC<QueueProps> = ({
             : "w-full"
         }
       >
-        <div
-          className={
-            isMinimized
-              ? ""
-              : shouldOpenPanelBelow
-                ? "flex flex-col gap-2"
-                : "space-y-2"
-          }
-        >
+        {/* The panel always opens below the dock so the dock never jumps. */}
+        <div className={isMinimized ? "" : "flex flex-col gap-2"}>
           <div
-            className={`sylica-expand-slot ${
-              shouldOpenPanelBelow ? "order-2" : "order-1"
-            } ${
+            className={`sylica-expand-slot order-2 ${
               hasExpandedPanel
                 ? "sylica-expand-slot-open"
                 : "sylica-expand-slot-closed"
@@ -777,15 +739,15 @@ const Queue: React.FC<QueueProps> = ({
             <div className="sylica-expand-slot-inner">
               {shouldRenderExpandedPanel && (
                 <div
-                  key={activeMode}
+                  key={panelContentMode}
                   data-sylica-size-box="true"
                   className="sylica-panel-switch sylica-liquid-shell w-full max-w-[var(--sylica-widget-shell-width)] px-3 py-3"
                   style={{ animationDelay: "100ms" }}
                 >
                   {/* Minimize button — collapses the panel back to the dock.
-                      Sessions (voice, agent, computer use) keep running in the
+                      Sessions (voice, computer use) keep running in the
                       background and their status pills stay visible. */}
-                  {(activeMode === "voice" || activeMode === "live" || activeMode === "agent") && (
+                  {(panelContentMode === "voice" || panelContentMode === "live") && (
                     <button
                       type="button"
                       onClick={handleClosePanel}
@@ -797,40 +759,13 @@ const Queue: React.FC<QueueProps> = ({
                       <X className="h-3 w-3" />
                     </button>
                   )}
-                  {activeMode === "agent" ? (
-                    <AgentPanel
-                      state={agentState}
-                      onStateChange={setAgentState}
-                      onOpenInterviewMode={handleOpenLiveMode}
-                      computerUseState={computerUseState}
-                      onStartComputerTask={async (task) => {
-                        try {
-                          const response = await window.electronAPI.startComputerUseTask({
-                            task,
-                          })
-                          if (!response.success) {
-                            showToast(
-                              "Computer Use",
-                              response.error || "Failed to start computer task.",
-                              "error"
-                            )
-                            throw new Error(response.error || "Failed to start")
-                          }
-                          setComputerUseState(response.data.state)
-                        } catch (error) {
-                          throw error
-                        }
-                      }}
-                      onStopComputerTask={handleStopComputerTask}
-                      onResumeComputerTask={handleResumeComputerTask}
-                    />
-                  ) : activeMode === "analyze" ? (
+                  {panelContentMode === "analyze" ? (
                     <ScreenshotQueue
                       isLoading={false}
                       screenshots={screenshots}
                       onDeleteScreenshot={handleDeleteScreenshot}
                     />
-                  ) : activeMode === "voice" ? (
+                  ) : panelContentMode === "voice" ? (
                     <VoiceAssistantPanel
                       computerTaskRequest={computerTaskRequest}
                       voiceAutoStartSignal={voiceAutoStartSignal}
@@ -853,11 +788,11 @@ const Queue: React.FC<QueueProps> = ({
             </div>
           </div>
 
-          <div className={shouldOpenPanelBelow ? "order-1" : "order-2"}>
+          <div className="order-1">
             <QueueCommands
               activeMode={activeMode}
               onOpenAnalyzeMode={handleOpenAnalyzeMode}
-              onOpenAgentMode={handleOpenAgentMode}
+              onOpenComputerUse={handleOpenComputerUse}
               onOpenVoiceMode={handleOpenVoiceMode}
               onTooltipVisibilityChange={handleTooltipVisibilityChange}
               screenshotCount={screenshots.length}
@@ -865,7 +800,6 @@ const Queue: React.FC<QueueProps> = ({
               desktopUpdateState={desktopUpdateState}
               isMinimized={isMinimized}
               computerUseState={computerUseState}
-              agentState={agentState}
               onDownloadUpdate={onDownloadUpdate}
               onInstallUpdate={onInstallUpdate}
               onStartComputerTask={handleStartComputerTask}

@@ -32,7 +32,6 @@ import type {
   CreateLocalPhonePairingSessionResponse,
   LocalPhoneRelayState,
 } from "../shared/localPhoneRelay"
-import type { AgentState } from "../shared/agent"
 import type {
   ConnectedAppIntegration,
   IntegrationConnectResponse,
@@ -69,7 +68,6 @@ const SHOW_UNINSTALL_OFFBOARDING_EVENT = "show-uninstall-offboarding"
 const LOCAL_PHONE_RELAY_STATE_EVENT = "local-phone-relay-state"
 const VOICE_REALTIME_EVENT = "voice-realtime-event"
 const AUTH_STATE_UPDATED_EVENT = "auth-state-updated"
-const AGENT_STATE_EVENT = "agent-state"
 
 // At the top of the file
 console.log("Preload script is running")
@@ -142,45 +140,6 @@ const electronAPI = {
         }
       } | { success: false; error: string }
     >,
-  getAgentState: () =>
-    ipcRenderer.invoke("agent:get-state") as Promise<
-      { success: true; data: { state: AgentState } } | { success: false; error: string }
-    >,
-  selectAgentWorkspace: () =>
-    ipcRenderer.invoke("agent:select-workspace") as Promise<
-      { success: true; data: { workspacePath: string } } | { success: false; error: string }
-    >,
-  startAgentTask: (payload: { prompt: string; workspacePath?: string }) =>
-    ipcRenderer.invoke("agent:start-task", payload) as Promise<
-      { success: true; data: { state: AgentState } } | { success: false; error: string }
-    >,
-  approveAgentPhase: (payload: { taskId: string; phaseId: string }) =>
-    ipcRenderer.invoke("agent:approve-phase", payload) as Promise<
-      { success: true; data: { state: AgentState } } | { success: false; error: string }
-    >,
-  rejectAgentPhase: (payload: { taskId: string; phaseId: string; reason?: string }) =>
-    ipcRenderer.invoke("agent:reject-phase", payload) as Promise<
-      { success: true; data: { state: AgentState } } | { success: false; error: string }
-    >,
-  stopAgentTask: () =>
-    ipcRenderer.invoke("agent:stop") as Promise<
-      { success: true; data: { state: AgentState } } | { success: false; error: string }
-    >,
-  openAgentArtifact: (payload: { artifactId: string }) =>
-    ipcRenderer.invoke("agent:open-artifact", payload) as Promise<
-      { success: true } | { success: false; error: string }
-    >,
-  openAgentWorkspace: () =>
-    ipcRenderer.invoke("agent:open-workspace") as Promise<
-      { success: true } | { success: false; error: string }
-    >,
-  onAgentState: (callback: (state: AgentState) => void) => {
-    const subscription = (_: unknown, state: AgentState) => callback(state)
-    ipcRenderer.on(AGENT_STATE_EVENT, subscription)
-    return () => {
-      ipcRenderer.removeListener(AGENT_STATE_EVENT, subscription)
-    }
-  },
   openPhoneRelayWindow: () =>
     ipcRenderer.invoke("app:open-phone-relay-window") as Promise<
       { success: true } | { success: false; error: string }

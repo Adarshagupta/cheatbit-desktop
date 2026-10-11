@@ -27,6 +27,8 @@ const APP_DATA_DIRECTORY = IS_LOCAL_DESKTOP_TEST
   : "sylica-ai"
 const LEGACY_APP_DATA_DIRECTORY = "cheatbit"
 const SHOW_UNINSTALL_OFFBOARDING_EVENT = "show-uninstall-offboarding"
+const VOICE_SCREEN_LONG_EDGE = 1280
+const VOICE_SCREEN_JPEG_QUALITY = 80
 
 const shouldUseWindowsOpaqueFallback =
   process.env.SYLICA_FORCE_OPAQUE_WINDOW === "1"
@@ -193,6 +195,7 @@ export interface IIpcHandlerDeps {
   moveWindowRight: () => void
   moveWindowUp: () => void
   moveWindowDown: () => void
+  captureVoiceScreenContext: () => Promise<{ data: string; mimeType: string }>
 }
 
 // Initialize helpers
@@ -966,6 +969,16 @@ function setWindowDimensions(width: number, height: number): void {
       Math.min(currentY, workArea.y + workArea.height - clampedHeight)
     )
 
+    // Skip no-op resizes; the renderer reports sizes on every layout change.
+    if (
+      currentBounds.x === nextX &&
+      currentBounds.y === nextY &&
+      currentBounds.width === clampedWidth &&
+      currentBounds.height === clampedHeight
+    ) {
+      return
+    }
+
     state.mainWindow.setBounds({
       x: nextX,
       y: nextY,
@@ -974,6 +987,40 @@ function setWindowDimensions(width: number, height: number): void {
     })
     state.currentX = nextX
     state.currentY = nextY
+  }
+}
+
+// Gives the realtime voice session a fresh look at the display the widget is
+// on. Captured as a downscaled JPEG to keep each update small.
+async function captureVoiceScreenContext(): Promise<{
+  data: string
+  mimeType: string
+}> {
+  const display =
+    state.mainWindow && !state.mainWindow.isDestroyed()
+      ? screen.getDisplayMatching(state.mainWindow.getBounds())
+      : screen.getPrimaryDisplay()
+  const { width, height } = display.size
+  const scale = Math.min(1, VOICE_SCREEN_LONG_EDGE / Math.max(width, height))
+
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: {
+      width: Math.round(width * scale),
+      height: Math.round(height * scale),
+    },
+  })
+  const source =
+    sources.find((candidate) => candidate.display_id === String(display.id)) ||
+    sources[0]
+
+  if (!source || source.thumbnail.isEmpty()) {
+    throw new Error("No screen available to capture.")
+  }
+
+  return {
+    data: source.thumbnail.toJPEG(VOICE_SCREEN_JPEG_QUALITY).toString("base64"),
+    mimeType: "image/jpeg",
   }
 }
 
@@ -1036,7 +1083,8 @@ async function initializeApp() {
           )
         ),
       moveWindowUp: () => moveWindowVertical((y) => y - state.step),
-      moveWindowDown: () => moveWindowVertical((y) => y + state.step)
+      moveWindowDown: () => moveWindowVertical((y) => y + state.step),
+      captureVoiceScreenContext
     })
     await createWindow()
     state.shortcutsHelper?.registerGlobalShortcuts()

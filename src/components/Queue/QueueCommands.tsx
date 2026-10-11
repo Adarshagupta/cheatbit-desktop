@@ -1,6 +1,5 @@
 import React, { useEffect, useState, type CSSProperties } from "react"
 import {
-  Brain,
   Focus,
   LayoutDashboard,
   Mic2,
@@ -9,7 +8,6 @@ import {
 } from "lucide-react"
 import type { ComputerUseState } from "../../../shared/followUpChat"
 import type { DesktopUpdateState } from "../../../shared/desktopUpdates"
-import type { AgentState } from "../../../shared/agent"
 import { useToast } from "../../contexts/toast"
 import { COMMAND_KEY } from "../../utils/platform"
 import { CheatbitMark } from "../Brand/CheatbitMark"
@@ -30,9 +28,9 @@ function isComputerTaskActive(status: ComputerUseState["status"]): boolean {
 }
 
 interface QueueCommandsProps {
-  activeMode: "analyze" | "voice" | "live" | "agent"
+  activeMode: "analyze" | "voice" | "live"
   onOpenAnalyzeMode: () => void
-  onOpenAgentMode: () => void
+  onOpenComputerUse: () => void
   onOpenVoiceMode?: () => void
   onTooltipVisibilityChange: (visible: boolean, height: number) => void
   screenshotCount?: number
@@ -41,7 +39,6 @@ interface QueueCommandsProps {
   isMinimized: boolean
   onToggleMinimized: () => void
   computerUseState: ComputerUseState
-  agentState: AgentState
   onDownloadUpdate: () => Promise<{ success: true } | { success: false; error: string }>
   onInstallUpdate: () => Promise<{ success: true } | { success: false; error: string }>
   onStartComputerTask: (task: string) => Promise<void> | void
@@ -53,7 +50,7 @@ interface QueueCommandsProps {
 const QueueCommands: React.FC<QueueCommandsProps> = ({
   activeMode,
   onOpenAnalyzeMode,
-  onOpenAgentMode,
+  onOpenComputerUse,
   onOpenVoiceMode,
   onTooltipVisibilityChange,
   screenshotCount = 0,
@@ -62,7 +59,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   isMinimized,
   onToggleMinimized,
   computerUseState,
-  agentState,
   onDownloadUpdate,
   onInstallUpdate,
   isDockOnly = false,
@@ -173,11 +169,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   }
 
   const isComputerUseActive = isComputerTaskActive(computerUseState.status)
-  const isAgentActive =
-    agentState.status === "planning" ||
-    agentState.status === "awaiting_workspace" ||
-    agentState.status === "awaiting_approval" ||
-    agentState.status === "running"
 
   const handleGuideCursorToggle = async () => {
     const nextEnabled = !isGuideCursorEnabled
@@ -214,7 +205,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             title="Expand"
             style={noDragStyle}
           >
-            <CheatbitMark className="h-6 w-6" rotating />
+            <CheatbitMark className="h-6 w-6" />
           </button>
         </div>
       </div>
@@ -238,7 +229,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             title="Minimize"
             style={{ ...noDragStyle, animationDelay: "30ms" }}
           >
-            <CheatbitMark className="h-6 w-6" rotating />
+            <CheatbitMark className="h-6 w-6" />
           </button>
 
           <button
@@ -278,7 +269,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           const showVoicePill =
             activeMode === "voice" || activeMode === "live" || isVoiceActive
           const activeCount =
-            (isAgentActive ? 1 : 0) +
             (isComputerUseActive ? 1 : 0) +
             (showVoicePill ? 1 : 0)
           const compact = activeCount >= 2
@@ -290,27 +280,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 
           return (
             <div className="flex shrink-0 items-center gap-1">
-              {isAgentActive && (
-                <button
-                  type="button"
-                  onClick={onOpenAgentMode}
-                  className={`${pillBase} ${pillSize} border-white/10 bg-white/5 text-white/75 hover:bg-white/10 hover:text-white`}
-                  aria-label="Open Agent — Working"
-                  title="Agent is working — click to open Agent"
-                  style={{ ...noDragStyle, animationDelay: "150ms" }}
-                >
-                  <span className="sylica-working-indicator scale-75" />
-                  {!compact && <span>Working</span>}
-                </button>
-              )}
-
               {isComputerUseActive && (
                 <button
                   type="button"
-                  onClick={onOpenAgentMode}
+                  onClick={onOpenComputerUse}
                   className={`${pillBase} ${pillSize} border-white/10 bg-white/5 text-white/75 hover:bg-white/10 hover:text-white`}
-                  aria-label="Open Agent — Computer Use"
-                  title="Computer Use is running — click to open Agent"
+                  aria-label="Open Computer Use"
+                  title="Computer Use is running — click to open"
                   style={{ ...noDragStyle, animationDelay: "165ms" }}
                 >
                   <span className="sylica-listening-indicator scale-75" />
@@ -394,17 +370,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
               onInstall={onInstallUpdate}
             />
           </div>
-
-          <button
-            type="button"
-            className={`sylica-dock-btn ${isAgentActive || activeMode === "agent" ? "sylica-dock-btn-active" : ""}`}
-            onClick={onOpenAgentMode}
-            aria-label="Agent"
-            title="Agent"
-            style={{ ...noDragStyle, animationDelay: "240ms" }}
-          >
-            <Brain className="h-4 w-4" />
-          </button>
 
           <button
             type="button"

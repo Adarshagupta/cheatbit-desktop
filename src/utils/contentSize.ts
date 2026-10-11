@@ -15,14 +15,23 @@ export function measureElementContentSize(element: HTMLElement): {
   }
 }
 
+// Once signed in, the app shell wraps every visible surface, so all callers
+// measure it. Measuring different nested elements made callers fight over the
+// window size and caused visible jitter.
 function resolveWindowSizeTarget(element: HTMLElement): HTMLElement {
   const appShell = document.querySelector(
-    "[data-app-shell='true'][data-aux-open='true']"
+    "[data-app-shell='true']"
   ) as HTMLElement | null
 
   return appShell || element
 }
 
+let pendingFrame: number | null = null
+let pendingElement: HTMLElement | null = null
+let pendingExtras = { width: 0, height: 0 }
+
+// Coalesces every resize request made during a frame into one measurement and
+// one IPC call, taken after layout has settled for that frame.
 export function updateWindowToElement(
   element: HTMLElement,
   extras: {
@@ -30,11 +39,34 @@ export function updateWindowToElement(
     height?: number
   } = {}
 ): void {
-  const target = resolveWindowSizeTarget(element)
-  const { width, height } = measureElementContentSize(target)
+  pendingElement = element
+  pendingExtras = {
+    width: Math.max(pendingExtras.width, extras.width ?? 0),
+    height: Math.max(pendingExtras.height, extras.height ?? 0)
+  }
 
-  window.electronAPI?.updateContentDimensions({
-    width: width + 4 + (extras.width ?? 0),
-    height: height + 4 + (extras.height ?? 0)
+  if (pendingFrame !== null) {
+    return
+  }
+
+  pendingFrame = window.requestAnimationFrame(() => {
+    pendingFrame = null
+    const element = pendingElement
+    const extras = pendingExtras
+    pendingElement = null
+    pendingExtras = { width: 0, height: 0 }
+
+    if (!element?.isConnected) {
+      return
+    }
+
+    const { width, height } = measureElementContentSize(
+      resolveWindowSizeTarget(element)
+    )
+
+    window.electronAPI?.updateContentDimensions({
+      width: width + 4 + extras.width,
+      height: height + 4 + extras.height
+    })
   })
 }

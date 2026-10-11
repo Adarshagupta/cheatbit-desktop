@@ -59,6 +59,11 @@ interface ExtractedQuestionInfo {
   key_details?: string[];
 }
 
+interface VisionImagePayload {
+  data: string;
+  mimeType: "image/jpeg" | "image/png";
+}
+
 interface StructuredSolutionResponse {
   question_type?: "coding" | "mcq" | "academic" | "general";
   is_code_response?: boolean;
@@ -107,6 +112,8 @@ const LIVE_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3"
 const LIVE_INTERVIEW_MAX_TOKENS = 520
 const LIVE_AUDIO_INTERVIEW_MAX_TOKENS = 420
 const FAST_VISION_LONG_EDGE = 1440
+const VISION_JPEG_QUALITY = 85
+const SOLUTION_STREAM_INTERVAL_MS = 50
 const ANALYZE_EXTRACTION_BASE_TOKENS = 900
 const ANALYZE_EXTRACTION_TOKENS_PER_EXTRA_IMAGE = 110
 const ANALYZE_EXTRACTION_MAX_TOKENS = 1340
@@ -125,6 +132,12 @@ const MCQ_ANSWER_KEY_RULES = `- If any multiple-choice questions are visible, be
 export class ProcessingHelper {
   private deps: IProcessingHelperDeps
   private screenshotHelper: ScreenshotHelper
+  private lastSolutionStreamSentAt = 0
+  private pendingSolutionStream: {
+    content: string
+    isCodeResponse: boolean
+  } | null = null
+  private solutionStreamTimer: NodeJS.Timeout | null = null
   private openaiClient: OpenAI | null = null
   private geminiApiKey: string | null = null
   private anthropicClient: Anthropic | null = null
@@ -203,29 +216,38 @@ export class ProcessingHelper {
     return DEFAULT_MODELS[provider][stage];
   }
 
-  private optimizeVisionImageData(base64: string): string {
+  // Screenshots go to vision models as JPEG: several times smaller than PNG at
+  // the same legibility, so the upload finishes and the answer starts sooner.
+  private optimizeVisionImageData(base64: string): VisionImagePayload {
     try {
       const image = nativeImage.createFromBuffer(Buffer.from(base64, "base64"))
       const size = image.getSize()
       const longestEdge = Math.max(size.width, size.height)
 
-      if (!longestEdge || longestEdge <= FAST_VISION_LONG_EDGE) {
-        return base64
+      if (!longestEdge) {
+        return { data: base64, mimeType: "image/png" }
       }
 
-      const scale = FAST_VISION_LONG_EDGE / longestEdge
-      const resizedImage = image.resize({
-        width: Math.max(1, Math.round(size.width * scale)),
-        height: Math.max(1, Math.round(size.height * scale)),
-        quality: "good",
-      })
+      const scale = Math.min(1, FAST_VISION_LONG_EDGE / longestEdge)
+      const resizedImage =
+        scale < 1
+          ? image.resize({
+              width: Math.max(1, Math.round(size.width * scale)),
+              height: Math.max(1, Math.round(size.height * scale)),
+              quality: "good",
+            })
+          : image
 
-      return resizedImage.toPNG().toString("base64")
+      return {
+        data: resizedImage.toJPEG(VISION_JPEG_QUALITY).toString("base64"),
+        mimeType: "image/jpeg",
+      }
     } catch (error) {
       console.warn("Falling back to original screenshot payload for vision.", error)
-      return base64
+      return { data: base64, mimeType: "image/png" }
     }
   }
+
 
   private getExtractionTokenBudget(imageCount: number): number {
     return Math.min(
@@ -413,21 +435,16 @@ Return only valid JSON in this exact field order:
   "thoughts": ["1 or 2 short reasoning bullets"],
   "time_complexity": "coding only, otherwise N/A - Not applicable",
   "space_complexity": "coding only, otherwise N/A - Not applicable",
-  "problem_statement": "full visible question or concise visible-content summary",
-  "content_summary": "summary only when there is no direct question, otherwise empty string",
+  "problem_statement": "one or two lines: the visible question, or a short summary of the visible content",
   "sub_questions": ["visible sub-questions or tasks in order"],
   "constraints": "short string",
-  "example_input": "short string",
-  "example_output": "short string",
   "answer_choices": ["MCQ options if any"],
-  "answer_format": "short string",
-  "existing_work": "short visible attempt/notes/code summary",
-  "key_details": ["short important facts or hints"]
+  "answer_format": "short string"
 }
 
 Rules:
 - Start the useful answer as early as possible.
-- Keep the answer minimal, correct, and fast to read.
+- Keep the answer short, correct, and fast to read. For MCQs, short means the answer key followed by one brief reason per question.
 - Include code only when the screenshot clearly asks for implementation.
 - If there is no clear question, summarize the visible content instead.
 - Include every visible sub-part in order.
@@ -607,8 +624,14 @@ ${MCQ_ANSWER_KEY_RULES}
     problemInfo: ExtractedQuestionInfo,
     solution: ReturnType<ProcessingHelper["normalizeSolutionResponse"]>
   ): boolean {
+    // A code answer is already the full solution; re-solving it in a second
+    // pass only doubled the wait.
+    if (solution.is_code_response && (solution.code || "").trim()) {
+      return true
+    }
+
     const answer = (solution.answer || solution.code || "").trim()
-    if (!answer || solution.is_code_response) {
+    if (!answer) {
       return false
     }
 
@@ -1257,9 +1280,9 @@ Instructions:
                 type: "text" as const,
                 text: extractionInstruction,
               },
-              ...optimizedImageDataList.map((data) => ({
+              ...optimizedImageDataList.map(({ data, mimeType }) => ({
                 type: "image_url" as const,
-                image_url: { url: `data:image/png;base64,${data}` },
+                image_url: { url: `data:${mimeType};base64,${data}` },
               })),
             ],
           },
@@ -1283,9 +1306,9 @@ Instructions:
               role: "user",
               parts: [
                 { text: extractionInstruction },
-                ...optimizedImageDataList.map((data) => ({
+                ...optimizedImageDataList.map(({ data, mimeType }) => ({
                   inlineData: {
-                    mimeType: "image/png",
+                    mimeType,
                     data,
                   },
                 })),
@@ -1324,11 +1347,11 @@ Instructions:
                 type: "text" as const,
                 text: extractionInstruction,
               },
-              ...optimizedImageDataList.map((data) => ({
+              ...optimizedImageDataList.map(({ data, mimeType }) => ({
                 type: "image" as const,
                 source: {
                   type: "base64" as const,
-                  media_type: "image/png" as const,
+                  media_type: mimeType,
                   data,
                 },
               })),
@@ -1390,9 +1413,9 @@ Instructions:
                 type: "text" as const,
                 text: analyzeInstruction,
               },
-              ...optimizedImageDataList.map((data) => ({
+              ...optimizedImageDataList.map(({ data, mimeType }) => ({
                 type: "image_url" as const,
-                image_url: { url: `data:image/png;base64,${data}` },
+                image_url: { url: `data:${mimeType};base64,${data}` },
               })),
             ],
           },
@@ -1519,9 +1542,9 @@ Instructions:
               role: "user",
               parts: [
                 { text: analyzeInstruction },
-                ...optimizedImageDataList.map((data) => ({
+                ...optimizedImageDataList.map(({ data, mimeType }) => ({
                   inlineData: {
-                    mimeType: "image/png",
+                    mimeType,
                     data,
                   },
                 })),
@@ -1560,11 +1583,11 @@ Instructions:
                 type: "text" as const,
                 text: analyzeInstruction,
               },
-              ...optimizedImageDataList.map((data) => ({
+              ...optimizedImageDataList.map(({ data, mimeType }) => ({
                 type: "image" as const,
                 source: {
                   type: "base64" as const,
-                  media_type: "image/png" as const,
+                  media_type: mimeType,
                   data,
                 },
               })),
@@ -2439,11 +2462,53 @@ Instructions:
     };
   }
 
+  // Each stream payload carries the full text so far, so intermediate updates
+  // can be dropped. Sending every token re-rendered (and re-highlighted) the
+  // answer dozens of times a second, which made streaming stutter.
   private emitSolutionStream(data: {
     content: string
     isCodeResponse: boolean
     done?: boolean
   }) {
+    if (data.done) {
+      this.clearPendingSolutionStream()
+      this.sendSolutionStream(data)
+      return
+    }
+
+    const wait =
+      SOLUTION_STREAM_INTERVAL_MS - (Date.now() - this.lastSolutionStreamSentAt)
+    if (wait <= 0 && !this.solutionStreamTimer) {
+      this.sendSolutionStream(data)
+      return
+    }
+
+    this.pendingSolutionStream = data
+    if (!this.solutionStreamTimer) {
+      this.solutionStreamTimer = setTimeout(() => {
+        this.solutionStreamTimer = null
+        const pending = this.pendingSolutionStream
+        this.pendingSolutionStream = null
+        if (pending) {
+          this.sendSolutionStream(pending)
+        }
+      }, Math.max(0, wait))
+    }
+  }
+
+  private clearPendingSolutionStream(): void {
+    if (this.solutionStreamTimer) {
+      clearTimeout(this.solutionStreamTimer)
+      this.solutionStreamTimer = null
+    }
+    this.pendingSolutionStream = null
+  }
+
+  private sendSolutionStream(data: {
+    content: string
+    isCodeResponse: boolean
+    done?: boolean
+  }): void {
     const mainWindow = this.deps.getMainWindow()
     if (!mainWindow) {
       return
@@ -2454,6 +2519,7 @@ Instructions:
       isCodeResponse: data.isCodeResponse,
       done: Boolean(data.done),
     })
+    this.lastSolutionStreamSentAt = Date.now()
   }
   
   /**
@@ -2713,18 +2779,11 @@ Instructions:
           return
         }
 
-        // Only set view to solutions if processing succeeded
+        // Only set view to solutions if processing succeeded.
+        // processScreenshotsHelper already sent SOLUTION_SUCCESS.
         console.log("Setting view to solutions after successful processing")
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
-          result.data
-        )
         this.deps.setView("solutions")
       } catch (error: any) {
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-          error
-        )
         console.error("Processing error:", error)
         if (axios.isCancel(error)) {
           mainWindow.webContents.send(
@@ -3079,9 +3138,9 @@ Instructions:
                 type: "text" as const, 
                 text: followUpPrompt
               },
-              ...imageDataList.map(data => ({
+              ...imageDataList.map(({ data, mimeType }) => ({
                 type: "image_url" as const,
-                image_url: { url: `data:image/png;base64,${data}` }
+                image_url: { url: `data:${mimeType};base64,${data}` }
               }))
             ]
           }
@@ -3120,9 +3179,9 @@ Instructions:
               role: "user",
               parts: [
                 { text: debugPrompt },
-                ...imageDataList.map(data => ({
+                ...imageDataList.map(({ data, mimeType }) => ({
                   inlineData: {
-                    mimeType: "image/png",
+                    mimeType,
                     data: data
                   }
                 }))
@@ -3182,11 +3241,11 @@ Instructions:
                   type: "text" as const,
                   text: debugPrompt
                 },
-                ...imageDataList.map(data => ({
+                ...imageDataList.map(({ data, mimeType }) => ({
                   type: "image" as const,
                   source: {
                     type: "base64" as const,
-                    media_type: "image/png" as const, 
+                    media_type: mimeType,
                     data: data
                   }
                 }))
@@ -3598,6 +3657,7 @@ Instructions:
 
   public cancelOngoingRequests(notifyRenderer = true): void {
     let wasCancelled = false
+    this.clearPendingSolutionStream()
 
     if (this.currentProcessingAbortController) {
       this.currentProcessingAbortController.abort()

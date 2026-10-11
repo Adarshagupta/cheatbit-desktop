@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { Mic, MicOff, SendHorizontal, Volume2 } from "lucide-react"
+import { Mic, MicOff, SendHorizontal } from "lucide-react"
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   type AssistantChatMode,
@@ -17,7 +17,6 @@ import type {
   LocalPhoneRelayEventSummary,
   LocalPhoneRelayState,
 } from "../../../shared/localPhoneRelay"
-import { EMPTY_AGENT_STATE, type AgentState } from "../../../shared/agent"
 import { useToast } from "../../contexts/toast"
 import { Button } from "../ui/button"
 import { isVoiceModeEnabled } from "../../lib/voiceMode"
@@ -38,6 +37,25 @@ const VOICE_MAX_SEGMENT_MS = 12_000
 const VOICE_MEMORY_STORAGE_KEY = "sylica.voiceCompanionMemory.v1"
 const VOICE_TRANSCRIPT_STORAGE_KEY = "sylica.voiceTranscript.v1"
 const VOICE_TRANSCRIPT_EVENT = "sylica-voice-transcript-updated"
+const VOICE_SHOW_TRANSCRIPT_STORAGE_KEY = "sylica.voiceShowTranscript.v1"
+
+type VoiceOrbState = "idle" | "listening" | "hearing" | "thinking" | "speaking"
+
+function loadShowVoiceTranscript(): boolean {
+  try {
+    return window.localStorage.getItem(VOICE_SHOW_TRANSCRIPT_STORAGE_KEY) === "true"
+  } catch {
+    return false
+  }
+}
+
+function saveShowVoiceTranscript(show: boolean): void {
+  try {
+    window.localStorage.setItem(VOICE_SHOW_TRANSCRIPT_STORAGE_KEY, String(show))
+  } catch {
+    // Storage can be unavailable; the switch still works for this session.
+  }
+}
 
 interface AssistantChatProps {
   queryKey: readonly string[]
@@ -439,11 +457,6 @@ Rules:
 }
 
 interface VoiceLiveContext {
-  agentRunning: boolean
-  agentStatus: string
-  agentPrompt: string
-  agentLatestEvent: string
-  agentPhaseTitle: string
   computerRunning: boolean
   computerStatus: string
   computerCurrentAction: string
@@ -468,11 +481,6 @@ function buildVoiceGreetingDirective(ctx: VoiceLiveContext): string {
             : "night"
 
   const livePieces: string[] = []
-  if (ctx.agentRunning) {
-    livePieces.push(
-      `an agent task is in progress${ctx.agentPrompt ? ` (${ctx.agentPrompt})` : ""}`
-    )
-  }
   if (ctx.computerRunning) {
     livePieces.push(
       `computer use is running${ctx.computerCurrentAction ? ` (${ctx.computerCurrentAction})` : ""}`
@@ -487,14 +495,6 @@ function buildVoiceGreetingDirective(ctx: VoiceLiveContext): string {
 
 function buildLiveContextBlock(ctx: VoiceLiveContext): string {
   const lines: string[] = []
-  if (ctx.agentRunning) {
-    lines.push(`AGENT MODE: RUNNING — ${ctx.agentStatus}`)
-    if (ctx.agentPrompt) lines.push(`  Goal: ${ctx.agentPrompt}`)
-    if (ctx.agentPhaseTitle) lines.push(`  Active phase: ${ctx.agentPhaseTitle}`)
-    if (ctx.agentLatestEvent) lines.push(`  Last event: ${ctx.agentLatestEvent}`)
-  } else {
-    lines.push("AGENT MODE: idle")
-  }
   if (ctx.computerRunning) {
     lines.push(`COMPUTER USE: RUNNING — ${ctx.computerStatus}`)
     if (ctx.computerCurrentAction) lines.push(`  Doing: ${ctx.computerCurrentAction}`)
@@ -511,7 +511,7 @@ function buildRealtimeVoiceInstructions(
   liveContext: VoiceLiveContext
 ) {
   const liveContextBlock = buildLiveContextBlock(liveContext)
-  const anyTaskRunning = liveContext.agentRunning || liveContext.computerRunning
+  const anyTaskRunning = liveContext.computerRunning
 
   return `You are Sylica — the user's personal AI in their ear. Not an assistant, not a tool, not a chatbot. A sharp, witty, slightly sassy companion who happens to know everything they need.
 
@@ -531,6 +531,14 @@ Core answer policy (this is non-negotiable, no matter how casual the vibe):
 - For math or logic, do a quick internal check before speaking. If uncertain, say the likely answer and your confidence.
 - For current markets, news, prices, weather, releases, schedules, or recommendations: require live search or visible data. If search isn't running yet, say "I need live search for that one" — don't guess.
 
+Conversation skills:
+- Keep the thread. Build on what was said earlier in this session; don't repeat yourself or greet again.
+- If they interrupt you, drop the old sentence and respond to the new point.
+- If you didn't catch what they said, or it could mean two things, ask one quick clarifying question instead of guessing.
+- Reply in the language they speak, and switch when they switch.
+- You're speaking, not writing: never read out code, URLs, symbols, or long lists character by character. Give the key idea or line, and offer to put the details in the chat.
+- Match their energy and pace. Short question, short answer.
+
 Screen + context:
 - You can receive fresh screen context while the user talks. Use it silently. Never say "screenshot", "screen capture", or "tool" — just see what they see.
 - If the user gestures at something on their screen ("this", "that thing", "what is this"), figure out what they mean and answer it. Make the smart leap.
@@ -539,10 +547,10 @@ Live workspace state (this is what's happening RIGHT NOW — read it before deci
 ${liveContextBlock}
 
 Routing (these aren't your job to execute, just hand them off cleanly):
-- If they ask you to create, build, clone, generate, design, code, or make a website, app, presentation, deck, project, or editable artifact, AND Agent Mode above is "idle", acknowledge with their exact target preserved and say "Starting agent mode: ..." — the desktop app routes the rest.
-- If they ask you to control the computer, operate Windows, open existing apps, click, type, delete, move, download, install, search, or manage files, AND Computer Use above is "idle", acknowledge with their exact target and say "Starting computer use: ..." — Computer Use is only for operating the PC UI, not for creating artifacts.
-- If a task is ALREADY RUNNING above and the user is talking about it, treat their input as a follow-up. Do NOT say "Starting agent mode:" or "Starting computer use:" — that would spawn a duplicate. Instead respond conversationally about the running task: tell them what's happening based on the live state above, what phase or action it's on, or pass on their refinement as a comment ("got it, I'll let it know to use a darker theme").
-- If a task is already running and the user clearly wants to start a SECOND, different task, say something like "agent's already busy with X — want me to queue this one or stop the current one?" and wait for their answer instead of spawning over the top.
+- If they ask you to create, build, design, write, or code something (a website, app, deck, document), help directly in the conversation: outline it, give the key parts, and offer to put the full code or content in the chat. Don't hand it to Computer Use.
+- If they ask you to control the computer, operate Windows, open existing apps, click, type, delete, move, download, install, search, or manage files, AND Computer Use above is "idle", acknowledge with their exact target and say "Starting computer use: ..." — Computer Use is only for operating the PC UI.
+- If a computer task is ALREADY RUNNING above and the user is talking about it, treat their input as a follow-up. Do NOT say "Starting computer use:" — that would spawn a duplicate. Instead tell them what's happening based on the live state above, or pass on their refinement.
+- If a computer task is already running and the user clearly wants a SECOND, different one, say it's busy with the current task and ask whether to stop it, instead of starting over the top.
 - If they want a web search, just say you're searching now. Don't invent results — the chat will run Exa search and show real sources.
 - If they ask about phone notifications, use the synced ones below. If none are synced, tell them no notifications have reached Sylica yet and to flip on Notification Access in the Android app.
 - If they ask "what's happening" / "what are you doing" / "where are we at" / "status", read the Live workspace state block above and tell them in one or two sentences. Don't pretend nothing's running if something is.
@@ -551,7 +559,7 @@ Remembered user context:
 ${memory || "Nothing locked in yet — fair game to ask if you need to know something stable about them."}
 
 Latest synced phone notifications:
-${phoneNotificationContext}${anyTaskRunning ? "\n\nReminder: a task is already running above — don't say \"Starting agent mode:\" or \"Starting computer use:\" right now unless the user explicitly asks for a brand new task." : ""}
+${phoneNotificationContext}${anyTaskRunning ? "\n\nReminder: a computer task is already running above — don't say \"Starting computer use:\" right now unless the user explicitly asks for a brand new task." : ""}
 
 Style rules:
 - One to three short spoken sentences for most replies. Stretch only when the user clearly wants depth.
@@ -568,8 +576,6 @@ type VoiceComputerCommand =
   | { type: "stop" }
   | { type: "resume" }
 
-type VoiceAgentCommand = { type: "start"; prompt: string }
-
 function normalizeCommandCandidate(transcript: string) {
   return transcript
     .replace(/\s+/g, " ")
@@ -578,7 +584,9 @@ function normalizeCommandCandidate(transcript: string) {
     .trim()
 }
 
-function isLikelyAgentCreationTask(text: string) {
+// Requests to create something (a site, app, deck, document) are answered in
+// the conversation, never routed to Computer Use.
+function isLikelyCreationRequest(text: string) {
   const command = normalizeCommandCandidate(text)
   const lower = command.toLowerCase()
   if (lower.length < 5) {
@@ -611,15 +619,7 @@ function isLikelyAgentCreationTask(text: string) {
     return true
   }
 
-  if (/\bagent\s*mode\b/i.test(lower) && hasArtifactNoun) {
-    return true
-  }
-
   return hasCreationVerb && hasArtifactNoun
-}
-
-function normalizeAgentPrompt(transcript: string) {
-  return normalizeCommandCandidate(transcript).replace(/\b(?:klon|clon)\b/gi, "clone")
 }
 
 function normalizeVoiceComputerTask(transcript: string) {
@@ -655,7 +655,7 @@ function detectVoiceComputerCommand(transcript: string): VoiceComputerCommand | 
     return null
   }
 
-  if (isLikelyAgentCreationTask(normalized)) {
+  if (isLikelyCreationRequest(normalized)) {
     return null
   }
 
@@ -714,22 +714,10 @@ function detectVoiceComputerCommand(transcript: string): VoiceComputerCommand | 
   return null
 }
 
-function detectVoiceAgentCommand(transcript: string): VoiceAgentCommand | null {
-  const normalized = transcript.replace(/\s+/g, " ").trim()
-  if (!isLikelyAgentCreationTask(normalized)) {
-    return null
-  }
-
-  const prompt = normalizeAgentPrompt(normalized)
-  return prompt ? { type: "start", prompt } : null
-}
-
 // Matches the model's own announcement so we can fire the action the moment
-// the assistant says "Starting agent mode: ..." instead of waiting for the
+// the assistant says "Starting computer use: ..." instead of waiting for the
 // user's final transcript. Requires either a sentence-ending punctuation or
-// a newline so we don't fire on a partial chunk like "Starting agent mode: bui".
-const ASSISTANT_STARTING_AGENT_PATTERN =
-  /starting\s+agent\s+mode\s*:\s*([^.\n!?]{3,})(?:[.!?\n]|$)/i
+// a newline so we don't fire on a partial chunk like "Starting computer use: op".
 const ASSISTANT_STARTING_COMPUTER_PATTERN =
   /starting\s+computer\s+use\s*:\s*([^.\n!?]{3,})(?:[.!?\n]|$)/i
 
@@ -879,13 +867,11 @@ export function AssistantChat({
   const [computerUseState, setComputerUseState] = useState<ComputerUseState>(
     EMPTY_COMPUTER_USE_STATE
   )
-  const [agentState, setAgentState] = useState<AgentState>(EMPTY_AGENT_STATE)
   const [liveState, setLiveState] = useState<LiveInterviewState>(
     EMPTY_LIVE_INTERVIEW_STATE
   )
   const [isLiveActionPending, setIsLiveActionPending] = useState(false)
   const [isComputerUseActionPending, setIsComputerUseActionPending] = useState(false)
-  const [isAgentActionPending, setIsAgentActionPending] = useState(false)
   const [isLiveListening, setIsLiveListening] = useState(false)
   const [isVoiceCompanionActive, setIsVoiceCompanionActive] = useState(
     globalVoiceSessionActive
@@ -893,7 +879,13 @@ export function AssistantChat({
   const [isVoiceCompanionHearing, setIsVoiceCompanionHearing] = useState(false)
   const [isVoiceSpeaking, setIsVoiceSpeaking] = useState(false)
   const [voiceStatus, setVoiceStatus] = useState("Ready for voice chat")
-  const [voiceLastHeard, setVoiceLastHeard] = useState("")
+  const [showVoiceTranscript, setShowVoiceTranscript] = useState(
+    loadShowVoiceTranscript
+  )
+  useEffect(() => {
+    saveShowVoiceTranscript(showVoiceTranscript)
+  }, [showVoiceTranscript])
+  const [, setVoiceLastHeard] = useState("")
   const [voiceMemory, setVoiceMemory] = useState(() => loadVoiceMemory())
   const [phoneNotificationContext, setPhoneNotificationContext] = useState(
     () => buildPhoneNotificationContext(null)
@@ -936,20 +928,12 @@ export function AssistantChat({
     command: string
     timestamp: number
   } | null>(null)
-  const lastVoiceAgentCommandRef = useRef<{
-    command: string
-    timestamp: number
-  } | null>(null)
-  const voiceAgentCommandHandlerRef = useRef<(transcript: string) => void>(
-    () => {}
-  )
   const voiceComputerCommandHandlerRef = useRef<(transcript: string) => void>(
     () => {}
   )
   // Tracks whether we've already fired an early-trigger for the model's
   // current response, so we don't double-fire on later text_delta chunks
   // or on the eventual final input_transcript.
-  const earlyFiredAgentForResponseRef = useRef<boolean>(false)
   const earlyFiredComputerForResponseRef = useRef<boolean>(false)
   const voiceAssistantEarlyTriggerHandlerRef = useRef<(assistantText: string) => void>(
     () => {}
@@ -971,38 +955,18 @@ export function AssistantChat({
       computerUseState.status === "running" ||
       computerUseState.status === "waiting_for_secret" ||
       computerUseState.status === "stopping")
-  const isAgentTaskRunning =
-    agentState.status === "planning" ||
-    agentState.status === "awaiting_workspace" ||
-    agentState.status === "awaiting_approval" ||
-    agentState.status === "running"
 
   // Live context object the realtime voice prompt reads each time we push
   // instructions. Keeping this memoized lets us re-push only when something
   // meaningful actually changed.
   const voiceLiveContext = useMemo<VoiceLiveContext>(() => {
-    const latestEvent = agentState.events[agentState.events.length - 1]
-    const activePhase = agentState.phases.find(
-      (phase) => phase.id === agentState.activePhaseId
-    )
     return {
-      agentRunning: isAgentTaskRunning,
-      agentStatus: agentState.status,
-      agentPrompt: agentState.prompt,
-      agentLatestEvent: latestEvent?.message || "",
-      agentPhaseTitle: activePhase?.title || "",
       computerRunning: isComputerUseSessionActive,
       computerStatus: computerUseState.status,
       computerCurrentAction: computerUseState.currentAction || "",
       computerCurrentUrl: computerUseState.currentUrl || "",
     }
   }, [
-    isAgentTaskRunning,
-    agentState.status,
-    agentState.prompt,
-    agentState.events,
-    agentState.phases,
-    agentState.activePhaseId,
     isComputerUseSessionActive,
     computerUseState.status,
     computerUseState.currentAction,
@@ -1507,16 +1471,8 @@ export function AssistantChat({
       }
     }
 
-    const loadAgentState = async () => {
-      const response = await window.electronAPI.getAgentState()
-      if (!cancelled && response.success) {
-        setAgentState(response.data.state)
-      }
-    }
-
     void loadLiveState()
     void loadComputerUseState()
-    void loadAgentState()
 
     const unsubscribe = window.electronAPI.onLiveInterviewState((state) => {
       setLiveState(state)
@@ -1524,15 +1480,11 @@ export function AssistantChat({
     const unsubscribeComputerUse = window.electronAPI.onComputerUseState((state) => {
       setComputerUseState(state)
     })
-    const unsubscribeAgent = window.electronAPI.onAgentState((state: AgentState) => {
-      setAgentState(state)
-    })
 
     return () => {
       cancelled = true
       unsubscribe()
       unsubscribeComputerUse()
-      unsubscribeAgent()
     }
   }, [isPersistedMode])
 
@@ -1878,105 +1830,6 @@ export function AssistantChat({
     }
   }
 
-  const startAgentModeTask = async (
-    prompt: string,
-    options: { fromVoice?: boolean; autoApproveFirstPhase?: boolean } = {}
-  ) => {
-    if (!isPersistedMode || isAgentActionPending) {
-      return false
-    }
-
-    const normalizedPrompt = prompt.trim()
-    if (!normalizedPrompt) {
-      return false
-    }
-
-    setIsAgentActionPending(true)
-    if (!options.fromVoice) {
-      const userAgentMessage: FollowUpChatMessage = {
-        id: `user-agent-${Date.now()}`,
-        role: "user",
-        content: normalizedPrompt,
-        createdAt: Date.now(),
-      }
-      updateChatMessages((previousMessages) => [...previousMessages, userAgentMessage])
-    }
-    appendLocalAssistantTranscript(
-      `Starting Agent Mode: ${normalizedPrompt}\nUsing Documents as the workspace.`,
-      { voice: options.fromVoice }
-    )
-    try {
-      const response = await window.electronAPI.startAgentTask({
-        prompt: normalizedPrompt,
-      })
-
-      if (!response.success) {
-        throw new Error(response.error)
-      }
-
-      const status = response.data.state.status
-      const workspaceName = response.data.state.workspacePath
-        ? response.data.state.workspacePath.split(/[\\/]/).filter(Boolean).pop() || "Documents"
-        : "Documents"
-      showToast(
-        "Agent Mode",
-        status === "awaiting_workspace"
-          ? "Choose a workspace folder to start this task."
-          : "Agent Mode is preparing the task.",
-        "neutral"
-      )
-      appendLocalAssistantTranscript(
-        status === "awaiting_workspace"
-          ? "Agent Mode needs a workspace before it can continue."
-          : `Agent Mode started in ${workspaceName}. Building the plan now.`,
-        { voice: options.fromVoice }
-      )
-
-      if (
-        options.autoApproveFirstPhase !== false &&
-        response.data.state.status === "awaiting_approval" &&
-        response.data.state.taskId &&
-        response.data.state.activePhaseId
-      ) {
-        appendLocalAssistantTranscript("Plan is ready. Starting the first build phase now.", {
-          voice: options.fromVoice,
-        })
-        const approval = await window.electronAPI.approveAgentPhase({
-          taskId: response.data.state.taskId,
-          phaseId: response.data.state.activePhaseId,
-        })
-
-        if (!approval.success) {
-          throw new Error(approval.error)
-        }
-
-        appendLocalAssistantTranscript("Agent is running. Progress is visible in the Agent panel.", {
-          voice: options.fromVoice,
-        })
-      }
-
-      if (options.fromVoice) {
-        setVoiceStatus("Agent Mode")
-      }
-      return true
-    } catch (error) {
-      appendLocalAssistantTranscript(
-        error instanceof Error
-          ? `Agent Mode failed: ${error.message}`
-          : "Agent Mode failed to start.",
-        { voice: options.fromVoice }
-      )
-      showToast(
-        "Agent Mode",
-        error instanceof Error ? error.message : "Failed to start Agent Mode.",
-        "error"
-      )
-      return false
-    } finally {
-      setIsAgentActionPending(false)
-    }
-  }
-
   const startComputerUseTask = async (
     task: string,
     options: { fromVoice?: boolean } = {}
@@ -2082,34 +1935,6 @@ export function AssistantChat({
     }
   }
 
-  const handleVoiceAgentCommand = async (transcript: string) => {
-    const command = detectVoiceAgentCommand(transcript)
-    if (!command || !isPersistedMode) {
-      return
-    }
-
-    const commandKey = `agent:${command.prompt.toLowerCase()}`
-    const previousCommand = lastVoiceAgentCommandRef.current
-    if (
-      previousCommand?.command === commandKey &&
-      Date.now() - previousCommand.timestamp < 8000
-    ) {
-      return
-    }
-
-    lastVoiceAgentCommandRef.current = {
-      command: commandKey,
-      timestamp: Date.now(),
-    }
-
-    showToast("Voice Agent", `Starting Agent Mode: ${command.prompt}`, "neutral")
-    await startAgentModeTask(command.prompt, { fromVoice: true })
-  }
-
-  voiceAgentCommandHandlerRef.current = (transcript: string) => {
-    void handleVoiceAgentCommand(transcript)
-  }
-
   const handleVoiceComputerCommand = async (transcript: string) => {
     const command = detectVoiceComputerCommand(transcript)
     if (!command || !isPersistedMode) {
@@ -2159,50 +1984,11 @@ export function AssistantChat({
     void handleVoiceComputerCommand(transcript)
   }
 
-  // Fire the agent / computer-use action the moment the model itself says
-  // "Starting agent mode: ..." or "Starting computer use: ...", so the working
-  // animation appears immediately instead of waiting for the final transcript.
+  // Fire the computer-use action the moment the model itself says
+  // "Starting computer use: ...", so the working animation appears
+  // immediately instead of waiting for the final transcript.
   const handleVoiceAssistantEarlyTrigger = async (assistantText: string) => {
     if (!isPersistedMode) return
-
-    if (!earlyFiredAgentForResponseRef.current) {
-      const target = extractAssistantStartingTarget(
-        ASSISTANT_STARTING_AGENT_PATTERN,
-        assistantText
-      )
-      if (target) {
-        earlyFiredAgentForResponseRef.current = true
-        // Guard: if an agent task is already running, do NOT spawn a duplicate.
-        // Treat the model's "Starting agent mode:" as a misfire (live context
-        // should have prevented this) and surface a friendly note instead.
-        if (isAgentTaskRunning || isAgentActionPending) {
-          showToast(
-            "Voice Agent",
-            "Agent's already busy with the current task — pass that as a follow-up instead.",
-            "neutral"
-          )
-          return
-        }
-        const commandKey = `agent:${target.toLowerCase()}`
-        const previous = lastVoiceAgentCommandRef.current
-        const isDuplicate =
-          previous?.command === commandKey &&
-          Date.now() - previous.timestamp < 8000
-        if (!isDuplicate) {
-          lastVoiceAgentCommandRef.current = {
-            command: commandKey,
-            timestamp: Date.now(),
-          }
-          // Flip visible status immediately so the working animation lights up
-          // the same frame we detect the trigger — before any IPC round-trip.
-          setVoiceStatus("Starting Agent Mode")
-          setIsAgentActionPending(true)
-          showToast("Voice Agent", `Starting Agent Mode: ${target}`, "neutral")
-          await startAgentModeTask(target, { fromVoice: true })
-        }
-        return
-      }
-    }
 
     if (!earlyFiredComputerForResponseRef.current) {
       const target = extractAssistantStartingTarget(
@@ -2300,17 +2086,6 @@ export function AssistantChat({
       : trimmedInput
 
     const activePersistedThread = threads.find((thread) => thread.id === activeThreadId)
-    if (isPersistedMode && isLikelyAgentCreationTask(trimmedInput)) {
-      setInput("")
-      if (isVoiceMessage) {
-        setVoiceStatus("Starting Agent Mode")
-      }
-      await startAgentModeTask(normalizeAgentPrompt(trimmedInput), {
-        fromVoice: isVoiceMessage,
-      })
-      return
-    }
-
     if (activePersistedThread?.mode === "computer_use") {
       showToast(
         "Computer Use",
@@ -3221,9 +2996,6 @@ export function AssistantChat({
         finishVoiceUserTranscript(event.transcript)
         // Skip triggers we already early-fired from the assistant's own text
         // so the same task doesn't launch twice in one turn.
-        if (!earlyFiredAgentForResponseRef.current) {
-          voiceAgentCommandHandlerRef.current(event.transcript)
-        }
         voiceSearchRequestHandlerRef.current(event.transcript)
         if (!earlyFiredComputerForResponseRef.current) {
           voiceComputerCommandHandlerRef.current(event.transcript)
@@ -3248,13 +3020,10 @@ export function AssistantChat({
       if (event.type === "text_delta") {
         voiceResponseTextRef.current += event.text
         appendVoiceAssistantTranscript(event.text)
-        // Early-fire: if the model has now said "Starting agent mode: ..." or
-        // "Starting computer use: ...", kick off the action immediately so
-        // the working animation shows without waiting for the final transcript.
-        if (
-          !earlyFiredAgentForResponseRef.current ||
-          !earlyFiredComputerForResponseRef.current
-        ) {
+        // Early-fire: if the model has now said "Starting computer use: ...",
+        // kick off the action immediately so the working animation shows
+        // without waiting for the final transcript.
+        if (!earlyFiredComputerForResponseRef.current) {
           voiceAssistantEarlyTriggerHandlerRef.current(
             voiceResponseTextRef.current
           )
@@ -3271,7 +3040,6 @@ export function AssistantChat({
         finishVoiceAssistantTranscript()
         // Reset early-fire flags so the next assistant response can trigger
         // its own actions without being blocked by the previous turn.
-        earlyFiredAgentForResponseRef.current = false
         earlyFiredComputerForResponseRef.current = false
         voiceResponseTextRef.current = ""
         if (voicePlaybackSourcesRef.current.length === 0) {
@@ -3444,20 +3212,30 @@ export function AssistantChat({
       ? "Complete the secret step in Chrome, then continue."
       : "Launch PC or browser automation from the computer icon in the widget strip.")
 
-  const voiceStatusLabel = isVoiceCompanionActive
-    ? isVoiceSpeaking
-      ? "Realtime voice speaking"
-      : isSending
-        ? "Realtime voice thinking"
+  const isVoicePanel = panelMode === "voice"
+  const voiceOrbState: VoiceOrbState = !isVoiceCompanionActive
+    ? "idle"
+    : isVoiceSpeaking
+      ? "speaking"
+      : isSending || /^thinking/i.test(voiceStatus)
+        ? "thinking"
         : isVoiceCompanionHearing
-          ? "Realtime voice hearing you"
-          : "Realtime voice listening"
-    : "Realtime voice"
-  const voicePreviewLabel =
-    voiceLastHeard.trim() ||
-    (voiceMemory.trim()
-      ? "Uses your screen and remembered context."
-      : "Talk naturally; I will use your screen when useful.")
+          ? "hearing"
+          : "listening"
+  const voiceStateWord: Record<VoiceOrbState, string> = {
+    idle: "Paused",
+    listening: "Listening",
+    hearing: "Hearing you",
+    thinking: "Thinking",
+    speaking: "Speaking",
+  }
+  const toggleVoiceCompanion = () => {
+    void (isVoiceCompanionActive ? stopVoiceCompanion() : startVoiceCompanion())
+  }
+  const isVoiceToggleDisabled =
+    !isVoiceCompanionActive && (isSending || isLiveSessionActive || isHistoryLoading)
+  // In voice mode the transcript is optional; without it only the orb shows.
+  const showVoiceConversation = !isVoicePanel || showVoiceTranscript
 
   const threadButtonsDisabled =
     isSending ||
@@ -3475,7 +3253,7 @@ export function AssistantChat({
     <div className={surfaceClassName}>
       {isPersistedMode && (
         <div className="space-y-2">
-          {!voiceFocused && (
+          {!voiceFocused && !isVoicePanel && (
           <div className="flex items-center gap-2 overflow-x-auto pb-1 text-[11px] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <button
               type="button"
@@ -3529,150 +3307,128 @@ export function AssistantChat({
           </div>
           )}
 
-          <div className="flex items-center justify-between gap-2 border-b border-white/8 px-1 pb-2 text-[10px] text-white/72">
-            <div className="min-w-0 flex-1">
-              {panelMode === "voice" ? (
-                <>
-                  <div className="flex items-center gap-1.5 truncate text-white">
-                    <Volume2 className="h-3.5 w-3.5 text-[#a8d8c4]" />
-                    <span className="truncate">{voiceStatusLabel}</span>
-                  </div>
-                  <div className="truncate text-[9px] text-white/42">
-                    {voiceStatus} - {voicePreviewLabel}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="truncate text-white">{liveStatusLabel}</div>
-                  <div className="truncate text-[9px] text-white/42">
-                    {livePreviewLabel}
-                  </div>
-                </>
-              )}
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                void (
-                  panelMode === "voice"
-                    ? isVoiceCompanionActive
-                      ? stopVoiceCompanion()
-                      : startVoiceCompanion()
-                    : isLiveSessionActive
-                      ? stopLiveInterview()
-                      : startLiveInterview()
-                )
-              }}
-              disabled={
-                panelMode === "voice"
-                  ? !isVoiceCompanionActive &&
-                    (isSending || isLiveSessionActive || isHistoryLoading)
-                  : isLiveActionPending ||
-                    isSending ||
-                    isHistoryLoading ||
-                    isVoiceCompanionActive
-              }
-              className={`h-7 rounded-full px-3 text-[10px] ${
-                (panelMode === "voice" ? isVoiceCompanionActive : isLiveSessionActive)
-                  ? "bg-white/10 text-white hover:bg-white/15"
-                  : "bg-[#a8d8c4] text-black hover:bg-[#bce5d2]"
-              }`}
-            >
-              {panelMode === "voice" ? (
-                isVoiceCompanionActive ? (
-                  <span className="inline-flex items-center gap-1">
-                    <MicOff className="h-3 w-3" />
-                    Stop
-                  </span>
+          {isVoicePanel ? (
+            <div className="flex items-center gap-2 px-1 text-[10px] text-white/72">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span
+                  className={`sylica-voice-dot sylica-voice-dot-${voiceOrbState}`}
+                  aria-hidden="true"
+                />
+                <span className="truncate text-white/80">
+                  {voiceStateWord[voiceOrbState]}
+                </span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showVoiceTranscript}
+                onClick={() => setShowVoiceTranscript((current) => !current)}
+                className="flex items-center gap-1.5 text-white/55 transition-colors hover:text-white/80"
+                title="Show the conversation as text"
+              >
+                Transcript
+                <span
+                  className={`relative h-3.5 w-6 rounded-full transition-colors ${
+                    showVoiceTranscript ? "bg-[#a8d8c4]" : "bg-white/15"
+                  }`}
+                >
+                  <span
+                    className={`absolute left-0.5 top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${
+                      showVoiceTranscript ? "translate-x-2.5" : ""
+                    }`}
+                  />
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void (isLiveSessionActive ? stopLiveInterview() : startLiveInterview())
+                }}
+                disabled={
+                  isLiveActionPending ||
+                  isSending ||
+                  isHistoryLoading ||
+                  isVoiceCompanionActive
+                }
+                className={`h-6 rounded-full px-2 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  isLiveSessionActive
+                    ? "bg-[#a8d8c4] text-black"
+                    : "bg-white/[0.07] text-white/70 hover:bg-white/[0.12] hover:text-white"
+                }`}
+                title={isLiveSessionActive ? "Stop Live Interview" : "Start Live Interview"}
+              >
+                {isLiveActionPending ? "..." : "Live"}
+              </button>
+              <Button
+                type="button"
+                size="icon"
+                onClick={toggleVoiceCompanion}
+                disabled={isVoiceToggleDisabled}
+                aria-label={isVoiceCompanionActive ? "Stop voice" : "Start voice"}
+                title={isVoiceCompanionActive ? "Stop voice" : "Start voice"}
+                className={`h-7 w-7 rounded-full ${
+                  isVoiceCompanionActive
+                    ? "bg-white/10 text-white hover:bg-white/15"
+                    : "bg-[#a8d8c4] text-black hover:bg-[#bce5d2]"
+                }`}
+              >
+                {isVoiceCompanionActive ? (
+                  <MicOff className="h-3.5 w-3.5" />
                 ) : (
-                  <span className="inline-flex items-center gap-1">
-                    <Mic className="h-3 w-3" />
-                    Starting
-                  </span>
-                )
-              ) : isLiveActionPending ? (
-                "..."
-              ) : isLiveSessionActive ? (
-                "Stop Live"
-              ) : (
-                "Start Live"
-              )}
-            </Button>
-          </div>
+                  <Mic className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 border-b border-white/8 px-1 pb-2 text-[10px] text-white/72">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-white">{liveStatusLabel}</div>
+                <div className="truncate text-[9px] text-white/42">
+                  {livePreviewLabel}
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  void (isLiveSessionActive ? stopLiveInterview() : startLiveInterview())
+                }}
+                disabled={
+                  isLiveActionPending ||
+                  isSending ||
+                  isHistoryLoading ||
+                  isVoiceCompanionActive
+                }
+                className={`h-7 rounded-full px-3 text-[10px] ${
+                  isLiveSessionActive
+                    ? "bg-white/10 text-white hover:bg-white/15"
+                    : "bg-[#a8d8c4] text-black hover:bg-[#bce5d2]"
+                }`}
+              >
+                {isLiveActionPending
+                  ? "..."
+                  : isLiveSessionActive
+                    ? "Stop Live"
+                    : "Start Live"}
+              </Button>
+            </div>
+          )}
 
-          {!voiceFocused && panelMode === "voice" && (
-          <div className="sylica-glass-chip flex items-center justify-between gap-2 rounded-[16px] px-3 py-2 text-[10px] text-white/62">
-            <div className="min-w-0 flex-1">
-              {panelMode === "voice" ? (
-                <>
-                  <div className="truncate">{liveStatusLabel}</div>
-                  <div className="truncate text-[9px] text-white/42">
-                    {livePreviewLabel}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-center gap-1.5 truncate">
-                    <Volume2 className="h-3 w-3 text-[#a8d8c4]/80" />
-                    <span className="truncate">{voiceStatusLabel}</span>
-                  </div>
-                  <div className="truncate text-[9px] text-white/42">
-                    {voiceStatus} - {voicePreviewLabel}
-                  </div>
-                </>
-              )}
-            </div>
-            <Button
+          {isVoicePanel && !showVoiceTranscript && (
+            <button
               type="button"
-              size="sm"
-              onClick={() => {
-                void (
-                  panelMode === "voice"
-                    ? isLiveSessionActive
-                      ? stopLiveInterview()
-                      : startLiveInterview()
-                    : isVoiceCompanionActive
-                      ? stopVoiceCompanion()
-                      : startVoiceCompanion()
-                )
-              }}
-              disabled={
-                panelMode === "voice"
-                  ? isLiveActionPending ||
-                    isSending ||
-                    isHistoryLoading ||
-                    isVoiceCompanionActive
-                  : !isVoiceCompanionActive &&
-                    (isSending || isLiveSessionActive || isHistoryLoading)
-              }
-              className={`h-6 rounded-full px-2.5 text-[10px] ${
-                (panelMode === "voice" ? isLiveSessionActive : isVoiceCompanionActive)
-                  ? "bg-white/10 text-white hover:bg-white/15"
-                  : "bg-[#a8d8c4] text-black hover:bg-[#bce5d2]"
+              onClick={toggleVoiceCompanion}
+              disabled={isVoiceToggleDisabled}
+              aria-label={`${voiceStateWord[voiceOrbState]}. ${
+                isVoiceCompanionActive ? "Tap to stop voice." : "Tap to start voice."
               }`}
+              className="flex w-full items-center justify-center py-4 disabled:cursor-not-allowed"
             >
-              {panelMode === "voice" ? (
-                isLiveActionPending ? (
-                  "..."
-                ) : isLiveSessionActive ? (
-                  "Stop Live"
-                ) : (
-                  "Live Interview"
-                )
-              ) : isVoiceCompanionActive ? (
-                <span className="inline-flex items-center gap-1">
-                  <MicOff className="h-3 w-3" />
-                  Stop
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1">
-                  <Mic className="h-3 w-3" />
-                  Voice
-                </span>
-              )}
-            </Button>
-          </div>
+              <span className={`sylica-voice-orb sylica-voice-orb-${voiceOrbState}`}>
+                <span className="sylica-voice-orb-ring" />
+                <span className="sylica-voice-orb-core" />
+              </span>
+            </button>
           )}
 
           {(isComputerUseSessionActive || isSelectedComputerThread) && (
@@ -3713,7 +3469,7 @@ export function AssistantChat({
         </div>
       )}
 
-      {displayedMessages.length > 0 && (
+      {showVoiceConversation && displayedMessages.length > 0 && (
         <div
           ref={messagesRef}
           className={`${maxHeightClassName} space-y-2 overflow-y-auto ${isVoiceOrLivePanel ? "pr-0" : "pr-1"} [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
@@ -3798,10 +3554,11 @@ export function AssistantChat({
         </div>
       )}
 
-      {isPersistedMode && isMessagesLoading && displayedMessages.length === 0 && (
+      {showVoiceConversation && isPersistedMode && isMessagesLoading && displayedMessages.length === 0 && (
         <div className="text-[11px] text-white/40">Loading chat...</div>
       )}
 
+      {showVoiceConversation && (
       <div
         className={
           isCompactFollowUpComposer
@@ -3884,6 +3641,7 @@ export function AssistantChat({
           {isSending ? "..." : <SendHorizontal className={isCompactFollowUpComposer || isVoiceOrLivePanel ? "h-3.5 w-3.5" : "h-4 w-4"} />}
         </Button>
       </div>
+      )}
     </div>
   )
 }

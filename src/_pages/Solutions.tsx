@@ -8,7 +8,6 @@ import { ProblemStatementData } from "../types/solutions"
 import SolutionCommands from "../components/Solutions/SolutionCommands"
 import Debug from "./Debug"
 import { useToast } from "../contexts/toast"
-import { COMMAND_KEY } from "../utils/platform"
 import { updateWindowToElement } from "../utils/contentSize"
 import { getProcessingToastCopy } from "../utils/processingErrors"
 import {
@@ -222,14 +221,6 @@ const Solutions: React.FC<SolutionsProps> = ({
 
   const [isResetting, setIsResetting] = useState(false)
 
-  interface Screenshot {
-    id: string
-    path: string
-    preview: string
-    timestamp: number
-  }
-
-  const [extraScreenshots, setExtraScreenshots] = useState<Screenshot[]>([])
   const displayedSolutionData = solutionData || streamingSolutionData
   const displayedIsCodeResponse = solutionData ? isCodeResponse : streamingIsCodeResponse
 
@@ -254,30 +245,6 @@ const Solutions: React.FC<SolutionsProps> = ({
     }
   }, [])
 
-  useEffect(() => {
-    const fetchScreenshots = async () => {
-      try {
-        const existing = await window.electronAPI.getScreenshots()
-        console.log("Raw screenshot data:", existing)
-        const screenshots = (Array.isArray(existing) ? existing : []).map(
-          (p) => ({
-            id: p.path,
-            path: p.path,
-            preview: p.preview,
-            timestamp: Date.now()
-          })
-        )
-        console.log("Processed screenshots:", screenshots)
-        setExtraScreenshots(screenshots)
-      } catch (error) {
-        console.error("Error loading extra screenshots:", error)
-        setExtraScreenshots([])
-      }
-    }
-
-    fetchScreenshots()
-  }, [solutionData])
-
   const { showToast } = useToast()
 
   useEffect(() => {
@@ -300,22 +267,6 @@ const Solutions: React.FC<SolutionsProps> = ({
 
     // Set up event listeners
     const cleanupFunctions = [
-      window.electronAPI.onScreenshotTaken(async () => {
-        try {
-          const existing = await window.electronAPI.getScreenshots()
-          const screenshots = (Array.isArray(existing) ? existing : []).map(
-            (p) => ({
-              id: p.path,
-              path: p.path,
-              preview: p.preview,
-              timestamp: Date.now()
-            })
-          )
-          setExtraScreenshots(screenshots)
-        } catch (error) {
-          console.error("Error loading extra screenshots:", error)
-        }
-      }),
       window.electronAPI.onResetView(() => {
         // Set resetting state first
         setIsResetting(true)
@@ -330,9 +281,6 @@ const Solutions: React.FC<SolutionsProps> = ({
         queryClient.removeQueries({
           queryKey: FOLLOW_UP_CHAT_QUERY_KEY
         })
-
-        // Reset screenshots
-        setExtraScreenshots([])
 
         // After a small delay, clear the resetting state
         setTimeout(() => {
@@ -409,26 +357,6 @@ const Solutions: React.FC<SolutionsProps> = ({
         setThoughtsData(solutionData.thoughts || null)
         setTimeComplexityData(solutionData.time_complexity || null)
         setSpaceComplexityData(solutionData.space_complexity || null)
-
-        // Fetch latest screenshots when solution is successful
-        const fetchScreenshots = async () => {
-          try {
-            const existing = await window.electronAPI.getScreenshots()
-            const screenshots = (Array.isArray(existing) ? existing : []).map(
-              (p) => ({
-                id: p.path,
-                path: p.path,
-                preview: p.preview,
-                timestamp: Date.now()
-              })
-            )
-            setExtraScreenshots(screenshots)
-          } catch (error) {
-            console.error("Error loading extra screenshots:", error)
-            setExtraScreenshots([])
-          }
-        }
-        fetchScreenshots()
       }),
 
       //########################################################
@@ -550,7 +478,6 @@ const Solutions: React.FC<SolutionsProps> = ({
             <SolutionCommands
               onTooltipVisibilityChange={handleTooltipVisibilityChange}
               isProcessing={!problemStatementData || !solutionData}
-              extraScreenshots={extraScreenshots}
               credits={credits}
               currentLanguage={currentLanguage}
               setLanguage={setLanguage}
@@ -628,7 +555,7 @@ const Solutions: React.FC<SolutionsProps> = ({
                 {displayedSolutionData && (
                   <>
                     <ContentSection
-                      title={`My Thoughts (${COMMAND_KEY} + Arrow keys to scroll)`}
+                      title="Thoughts"
                       content={
                         thoughtsData && (
                           <div className="space-y-3">

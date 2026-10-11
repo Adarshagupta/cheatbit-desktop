@@ -68,24 +68,16 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
     // Force initial dimension update immediately
     updateDimensions()
 
+    // Size changes are all the window cares about; a MutationObserver here
+    // fired on every streamed token and keystroke.
     const resizeObserver = new ResizeObserver(updateDimensions)
     resizeObserver.observe(containerRef.current)
-
-    // Also watch DOM changes
-    const mutationObserver = new MutationObserver(updateDimensions)
-    mutationObserver.observe(containerRef.current, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true
-    })
 
     // Do another update after a delay to catch any late-loading content
     const delayedUpdate = setTimeout(updateDimensions, 1000)
 
     return () => {
       resizeObserver.disconnect()
-      mutationObserver.disconnect()
       clearTimeout(delayedUpdate)
     }
   }, [view])

@@ -228,38 +228,6 @@ option {
   animation: sylicaDockExpand 420ms var(--sylica-spring) both;
 }
 
-.sylica-expand-slot {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transform: translateY(-8px) scale(0.985);
-  filter: blur(8px);
-  transform-origin: top center;
-  transition:
-    grid-template-rows 520ms var(--sylica-spring),
-    opacity 320ms ease,
-    transform 520ms var(--sylica-spring),
-    filter 420ms var(--sylica-spring),
-    margin 520ms var(--sylica-spring);
-  will-change: grid-template-rows, transform, opacity, filter;
-}
-
-.sylica-expand-slot-open {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  filter: blur(0);
-}
-
-.sylica-expand-slot-closed {
-  pointer-events: none;
-}
-
-.sylica-expand-slot-inner {
-  min-height: 0;
-  overflow: hidden;
-}
-
 .sylica-sheet-enter {
   animation: sylicaSheetEnter 260ms var(--sylica-spring) both;
   transform-origin: top center;
@@ -604,7 +572,6 @@ option {
 .sylica-dock-btn-active {
   background: var(--sylica-accent-soft);
   color: var(--sylica-accent);
-  animation: dock-btn-active-pulse 2400ms ease-in-out infinite;
 }
 
 .sylica-dock-btn-primary {
@@ -739,6 +706,11 @@ option {
 .sylica-expand-slot-inner {
   min-height: 0;
   overflow: visible;
+}
+
+/* Clip while collapsing so content doesn't spill over the dock. */
+.sylica-expand-slot-closed .sylica-expand-slot-inner {
+  overflow: hidden;
 }
 
 /* Content switch animation */
@@ -1089,7 +1061,6 @@ option {
   border-radius: 14px;
   border: 1px solid var(--sylica-glass-soft-border);
   background: var(--sylica-surface-muted);
-  backdrop-filter: blur(12px);
 }
 
 .sylica-liquid-panel::before {
@@ -1513,5 +1484,157 @@ option {
   .sylica-liquid-shell,
   .sylica-liquid-dock {
     transition: none;
+  }
+}
+
+/* Voice mode: status dot and assistant orb (shown when the transcript is off). */
+.sylica-voice-dot {
+  height: 6px;
+  width: 6px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.3);
+  transition: background-color 240ms ease;
+}
+
+.sylica-voice-dot-listening,
+.sylica-voice-dot-hearing {
+  background: var(--sylica-accent);
+}
+
+.sylica-voice-dot-hearing {
+  animation: sylicaVoiceDotPulse 900ms ease-in-out infinite;
+}
+
+.sylica-voice-dot-thinking {
+  background: #c9b8ff;
+  animation: sylicaVoiceDotPulse 1400ms ease-in-out infinite;
+}
+
+.sylica-voice-dot-speaking {
+  background: #ffffff;
+}
+
+.sylica-voice-orb {
+  position: relative;
+  display: block;
+  height: 64px;
+  width: 64px;
+}
+
+.sylica-voice-orb-core,
+.sylica-voice-orb-ring {
+  position: absolute;
+  inset: 8px;
+  border-radius: 9999px;
+}
+
+.sylica-voice-orb-core {
+  background: radial-gradient(
+    circle at 35% 30%,
+    #e8fff5 0%,
+    var(--sylica-accent) 45%,
+    #3c6b5c 100%
+  );
+  box-shadow: 0 0 24px rgba(168, 216, 196, 0.35);
+  transition:
+    transform 320ms var(--sylica-spring),
+    opacity 320ms ease,
+    filter 320ms ease;
+}
+
+.sylica-voice-orb-ring {
+  border: 1px solid rgba(168, 216, 196, 0.45);
+  opacity: 0;
+}
+
+.sylica-voice-orb-idle .sylica-voice-orb-core {
+  opacity: 0.45;
+  filter: saturate(0.4);
+  transform: scale(0.88);
+}
+
+.sylica-voice-orb-listening .sylica-voice-orb-core {
+  animation: sylicaOrbBreathe 3200ms ease-in-out infinite;
+}
+
+.sylica-voice-orb-hearing .sylica-voice-orb-core {
+  animation: sylicaOrbBreathe 900ms ease-in-out infinite;
+}
+
+.sylica-voice-orb-thinking .sylica-voice-orb-core {
+  background: conic-gradient(
+    from 0deg,
+    var(--sylica-accent),
+    #c9b8ff,
+    #e8fff5,
+    var(--sylica-accent)
+  );
+  animation: sylicaOrbSpin 1600ms linear infinite;
+}
+
+.sylica-voice-orb-speaking .sylica-voice-orb-core {
+  animation: sylicaOrbSpeak 420ms ease-in-out infinite alternate;
+}
+
+.sylica-voice-orb-hearing .sylica-voice-orb-ring {
+  animation: sylicaOrbRipple 1200ms ease-out infinite;
+}
+
+.sylica-voice-orb-speaking .sylica-voice-orb-ring {
+  animation: sylicaOrbRipple 900ms ease-out infinite;
+}
+
+@keyframes sylicaOrbBreathe {
+  0%,
+  100% {
+    transform: scale(0.94);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes sylicaOrbSpeak {
+  from {
+    transform: scale(0.96);
+  }
+  to {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes sylicaOrbSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sylicaOrbRipple {
+  from {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+
+@keyframes sylicaVoiceDotPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sylica-voice-dot,
+  .sylica-voice-orb-core,
+  .sylica-voice-orb-ring {
+    animation: none !important;
   }
 }

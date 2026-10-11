@@ -25,12 +25,10 @@ import type {
   VoiceRealtimeEvent,
 } from "../shared/followUpChat"
 import type { LocalPhoneRelayState } from "../shared/localPhoneRelay"
-import type { AgentState } from "../shared/agent"
 
 const TEXT_FOLLOW_UP_STREAM_EVENT = "text-follow-up-stream"
 const LOCAL_PHONE_RELAY_STATE_EVENT = "local-phone-relay-state"
 const VOICE_REALTIME_EVENT = "voice-realtime-event"
-const AGENT_STATE_EVENT = "agent-state"
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime-2"
 const OPENAI_REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE?.trim() || "marin"
@@ -44,6 +42,7 @@ interface VoiceRealtimeSession {
   socket: RealtimeSocket
   startedAt: number
   lastScreenAt: number
+  lastScreenItemId: string | null
   screenRefreshInFlight: boolean
   instructions: string
   assistantTranscript: string
@@ -102,14 +101,6 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     }
   })
 
-  deps.agentController?.subscribe((state) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) {
-        window.webContents.send(AGENT_STATE_EVENT, state)
-      }
-    }
-  })
-
   let voiceRealtimeSession: VoiceRealtimeSession | null = null
 
   const emitVoiceRealtimeEvent = (payload: VoiceRealtimeEvent): void => {
@@ -156,10 +147,24 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         return
       }
 
+      // Keep only the latest screen in the conversation; older ones would
+      // pile up and make every turn slower and more expensive.
+      if (session.lastScreenItemId) {
+        session.socket.send(
+          JSON.stringify({
+            type: "conversation.item.delete",
+            item_id: session.lastScreenItemId,
+          })
+        )
+      }
+      const screenItemId = `screen_${Date.now().toString(36)}`
+      session.lastScreenItemId = screenItemId
+
       session.socket.send(
         JSON.stringify({
           type: "conversation.item.create",
           item: {
+            id: screenItemId,
             type: "message",
             role: "user",
             content: [
@@ -170,7 +175,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
               },
               {
                 type: "input_image",
-                image_url: `data:image/png;base64,${capture.data}`,
+                image_url: `data:${capture.mimeType};base64,${capture.data}`,
               },
             ],
           },
@@ -206,15 +211,15 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
               noise_reduction: {
                 type: "near_field",
               },
+              // No pinned language, so speech in any language transcribes.
               transcription: {
                 model: "gpt-4o-mini-transcribe",
-                language: "en",
               },
+              // semantic_vad decides from what was said whether the user is
+              // done, instead of cutting them off after a short pause.
               turn_detection: {
-                type: "server_vad",
-                threshold: 0.45,
-                prefix_padding_ms: 260,
-                silence_duration_ms: 420,
+                type: "semantic_vad",
+                eagerness: "auto",
                 create_response: true,
                 interrupt_response: true,
               },
@@ -497,9 +502,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         ? "live_interview"
       : rawMode === "computer_use"
         ? "computer_use"
-        : rawMode === "agent"
-          ? "agent"
-          : "general"
+        : "general"
 
   const hasPendingProcessingInputs = (): boolean =>
     deps.getView() === "queue"
@@ -1119,6 +1122,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       socket,
       startedAt: Date.now(),
       lastScreenAt: 0,
+      lastScreenItemId: null,
       screenRefreshInFlight: false,
       instructions,
       assistantTranscript: "",
@@ -1421,153 +1425,6 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       success: true as const,
       data: result.data as ComputerUseResumeData,
     }
-  })
-
-  ipcMain.handle("agent:get-state", async () => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    return {
-      success: true as const,
-      data: {
-        state: controller.getState() as AgentState,
-      },
-    }
-  })
-
-  ipcMain.handle("agent:select-workspace", async () => {
-    try {
-      const mainWindow = deps.getMainWindow()
-      const options: OpenDialogOptions = {
-        title: "Choose Sylica Agent workspace",
-        properties: ["openDirectory", "createDirectory"],
-      }
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, options)
-        : await dialog.showOpenDialog(options)
-
-      if (result.canceled || !result.filePaths[0]) {
-        return {
-          success: false as const,
-          error: "No workspace selected.",
-        }
-      }
-
-      return {
-        success: true as const,
-        data: {
-          workspacePath: result.filePaths[0],
-        },
-      }
-    } catch (error) {
-      return {
-        success: false as const,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to choose an Agent workspace.",
-      }
-    }
-  })
-
-  ipcMain.handle("agent:start-task", async (_event, payload) => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    const result = await controller.startTask({
-      prompt: String(payload?.prompt || ""),
-      workspacePath: String(payload?.workspacePath || "") || undefined,
-    })
-
-    if ("error" in result) {
-      if (result.authRequired) {
-        notifyUnauthorized()
-      }
-
-      return {
-        success: false as const,
-        error: result.error,
-      }
-    }
-
-    return result
-  })
-
-  ipcMain.handle("agent:approve-phase", async (_event, payload) => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    return controller.approvePhase({
-      taskId: String(payload?.taskId || ""),
-      phaseId: String(payload?.phaseId || ""),
-    })
-  })
-
-  ipcMain.handle("agent:reject-phase", async (_event, payload) => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    return controller.rejectPhase({
-      taskId: String(payload?.taskId || ""),
-      phaseId: String(payload?.phaseId || ""),
-      reason: String(payload?.reason || ""),
-    })
-  })
-
-  ipcMain.handle("agent:stop", async () => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    return controller.stop()
-  })
-
-  ipcMain.handle("agent:open-artifact", async (_event, payload) => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    return controller.openArtifact(String(payload?.artifactId || ""))
-  })
-
-  ipcMain.handle("agent:open-workspace", async () => {
-    const controller = deps.agentController
-    if (!controller) {
-      return {
-        success: false as const,
-        error: "Agent Mode is not available right now.",
-      }
-    }
-
-    return controller.openWorkspace()
   })
 
   ipcMain.handle("chat:get-messages", async (_event, payload) => {

@@ -30,7 +30,6 @@ import type {
   CreateLocalPhonePairingSessionResponse,
   LocalPhoneRelayState,
 } from "../../shared/localPhoneRelay"
-import type { AgentState } from "../../shared/agent"
 import type {
   ConnectedAppIntegration,
   IntegrationConnectResponse,
@@ -97,41 +96,6 @@ export interface ElectronAPI {
       }
     } | { success: false; error: string }
   >
-  getAgentState: () => Promise<
-    { success: true; data: { state: AgentState } } | { success: false; error: string }
-  >
-  selectAgentWorkspace: () => Promise<
-    { success: true; data: { workspacePath: string } } | { success: false; error: string }
-  >
-  startAgentTask: (payload: {
-    prompt: string
-    workspacePath?: string
-  }) => Promise<
-    { success: true; data: { state: AgentState } } | { success: false; error: string }
-  >
-  approveAgentPhase: (payload: {
-    taskId: string
-    phaseId: string
-  }) => Promise<
-    { success: true; data: { state: AgentState } } | { success: false; error: string }
-  >
-  rejectAgentPhase: (payload: {
-    taskId: string
-    phaseId: string
-    reason?: string
-  }) => Promise<
-    { success: true; data: { state: AgentState } } | { success: false; error: string }
-  >
-  stopAgentTask: () => Promise<
-    { success: true; data: { state: AgentState } } | { success: false; error: string }
-  >
-  openAgentArtifact: (payload: {
-    artifactId: string
-  }) => Promise<{ success: true } | { success: false; error: string }>
-  openAgentWorkspace: () => Promise<
-    { success: true } | { success: false; error: string }
-  >
-  onAgentState: (callback: (state: AgentState) => void) => () => void
   openPhoneRelayWindow: () => Promise<
     { success: true } | { success: false; error: string }
   >
